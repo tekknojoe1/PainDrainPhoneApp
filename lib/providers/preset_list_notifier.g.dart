@@ -7,7 +7,7 @@ part of 'preset_list_notifier.dart';
 // **************************************************************************
 
 String _$presetListNotifierHash() =>
-    r'5b30df5140f08668d98feda0aabbaa3d3b2bcbbd';
+    r'eeae810c3b6e717a1938255b80479bb6b78f1d60';
 
 /// See also [PresetListNotifier].
 @ProviderFor(PresetListNotifier)

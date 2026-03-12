@@ -46,14 +46,14 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   Flutter: e0871f40cf51350855a761d2e70bf5af5b9b5de7
-  flutter_blue_plus: 4837da7d00cf5d441fdd6635b3a57f936778ea96
-  flutter_keyboard_visibility: 0339d06371254c3eb25eeb90ba8d17dca8f9c069
-  haptic_feedback: 8cb3ee0cb6b797946c2b0df9c99ebc8f7ed79c71
-  location: d5cf8598915965547c3f36761ae9cc4f4e87d22e
-  package_info_plus: 115f4ad11e0698c8c1c5d8a689390df880f47e85
-  permission_handler_apple: 9878588469a2b0d0fc1e048d9f43605f92e6cec2
-  shared_preferences_foundation: fcdcbc04712aee1108ac7fda236f363274528f78
+  flutter_blue_plus: e5808fc4e5ebc58bb911635f8fdaf5e2b4da2754
+  flutter_keyboard_visibility: 4625131e43015dbbe759d9b20daaf77e0e3f6619
+  haptic_feedback: fd1d8509833f58f164fc12122c0357fa9b2750e0
+  location: 155caecf9da4f280ab5fe4a55f94ceccfab838f8
+  package_info_plus: 566e1b7a2f3900e4b0020914ad3fc051dcc95596
+  permission_handler_apple: 4ed2196e43d0651e8ff7ca3483a069d469701f2d
+  shared_preferences_foundation: 9e1978ff2562383bd5676f64ec4e9aa8fa06a6f7
 
-PODFILE CHECKSUM: 819463e6a0290f5a72f145ba7cde16e8b6ef0796
+PODFILE CHECKSUM: a57f30d18f102dd3ce366b1d62a55ecbef2158e5
 
 COCOAPODS: 1.16.2

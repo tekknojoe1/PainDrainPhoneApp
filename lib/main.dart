@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:device_preview/device_preview.dart';
+
 import 'package:go_router/go_router.dart';
 import 'package:pain_drain_mobile_app/utils/go_router.dart';
 
@@ -15,10 +15,7 @@ Future<void> main() async {
 
   runApp(
     ProviderScope(
-      child: DevicePreview(
-        enabled: false, // Set to true if you want to preview on different devices.
-        builder: (context) => MyApp(router: routes),
-      ),
+      child: MyApp(router: routes),
     ),
   );
 
@@ -35,8 +32,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
-      // Optionally, wrap your app with DevicePreview's appBuilder if needed:
-      builder: DevicePreview.appBuilder,
+      builder: (context, child) => MediaQuery(data: MediaQuery.of(context), child: child ?? const SizedBox.shrink()),
       title: 'Pain Drain',
       debugShowCheckedModeBanner: false,
       routerDelegate: router.routerDelegate,
