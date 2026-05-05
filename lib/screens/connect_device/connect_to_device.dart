@@ -311,9 +311,9 @@ class _ConnectDeviceState extends ConsumerState<ConnectDevice> with SingleTicker
                             borderRadius: BorderRadius.circular(20.0),
                           ),
                         ),
-                        child: const Text(
-                          'CONNECT',
-                          style: TextStyle(fontSize: 18, color: Colors.white),
+                        child: Text(
+                          isPulsing ? 'CONNECTING' : 'CONNECT',
+                          style: const TextStyle(fontSize: 18, color: Colors.white),
                         ),
                       ),
                     ),
