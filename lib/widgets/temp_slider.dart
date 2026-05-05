@@ -21,8 +21,8 @@ class _TempSliderState extends ConsumerState<TempSlider> {
   //final Stimulus _stimController = Get.find();
   //final Bluetooth _bleController = Get.find();
 
-  final double _minValue = -100;
-  final double _maxValue = 100;
+  final double _minValue = -33;
+  final double _maxValue = 33;
   Color trackBarColor = Colors.grey;
   Color thumbSlider = Colors.grey;
 
@@ -68,7 +68,7 @@ class _TempSliderState extends ConsumerState<TempSlider> {
             inactiveDisabledTrackBarColor: Colors.grey
         ),
         handler: FlutterSliderHandler(
-            child: Text("${temp.temperature.toInt()}%", style: const TextStyle(color: Colors.white)),
+            child: Text("${temp.temperature > 0 ? '+' : ''}${temp.temperature.toInt()}°F", style: const TextStyle(color: Colors.white)),
             decoration: BoxDecoration(
                 color: thumbSlider,
                 borderRadius: BorderRadius.circular(50.0)

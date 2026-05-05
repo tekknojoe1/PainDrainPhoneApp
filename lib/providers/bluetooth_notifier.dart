@@ -270,8 +270,9 @@ class BluetoothNotifier extends _$BluetoothNotifier {
         print("tens command: $command");
         break;
       case "temperature":
-        String temp = ref.read(temperatureNotifierProvider).temperature.toString();
-        command = "t $temp";
+        int tempF = ref.read(temperatureNotifierProvider).temperature;
+        int tempC = tempF == 0 ? 0 : (tempF * 5 / 9).round();
+        command = "t $tempC";
         print("temperature command: $command");
         break;
       case "vibration":
