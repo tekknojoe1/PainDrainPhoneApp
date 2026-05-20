@@ -68,7 +68,7 @@ class _TemperatureSummaryState extends ConsumerState<TemperatureSummary> {
                 animationDuration: 2000,
                 animateFromLastPercent: true,
                 circularStrokeCap: CircularStrokeCap.round,
-                percent: temp.temperature.abs() / 33,
+                percent: temp.temperature.abs() / 100,
                 arcType: ArcType.FULL,
                 linearGradient: LinearGradient(colors: colorGradient),
                 center: Column(
@@ -83,7 +83,7 @@ class _TemperatureSummaryState extends ConsumerState<TemperatureSummary> {
                       const SizedBox(height: 5.0,),
 
                       Text(
-                        "${temp.temperature.toInt()}°F",
+                        "${temp.temperature.toInt()}%",
                         style: const TextStyle(fontSize: 16, color: Colors.white),
                       ),
                       // SizedBox(width: 3.0,),
