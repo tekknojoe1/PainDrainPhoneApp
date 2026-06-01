@@ -15,6 +15,7 @@ import 'package:pain_drain_mobile_app/providers/preset_list_notifier.dart';
 import 'package:pain_drain_mobile_app/providers/temperature_notifier.dart';
 import 'package:pain_drain_mobile_app/providers/tens_notifier.dart';
 import 'package:pain_drain_mobile_app/providers/vibration_notifier.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:pain_drain_mobile_app/screens/home/local_widgets/onboarding.dart';
 import 'package:pain_drain_mobile_app/widgets/custom_text_field.dart';
 import 'package:pain_drain_mobile_app/widgets/drop_down_button.dart';
@@ -51,6 +52,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
   String currentOption = presetOptions[0];
   String uploadToDeviceString = "Uploading preset to device...";
   late AnimationController _controller;
+  String _appVersion = '';
   int? _selectedIndex; // Track which button is selected
   int? _loadingIndex; // Track which button is showing a progress indicator
   double _progress = 0.0; // Track progress percentage
@@ -73,8 +75,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
   void initState() {
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 2), // Duration for one complete cycle
+      duration: const Duration(seconds: 2),
     );
+    PackageInfo.fromPlatform().then((info) {
+      setState(() => _appVersion = info.version);
+    });
     super.initState();
   }
 
@@ -310,6 +315,26 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
             automaticallyImplyLeading: false,
             backgroundColor: Colors.blue.shade800,
             centerTitle: true,
+            actions: [
+              IconButton(
+                icon: Icon(Icons.info_outline, color: Colors.grey.shade300),
+                onPressed: () {
+                  showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('App Version'),
+                      content: Text('Version $_appVersion'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('OK'),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ],
           ),
           body: SingleChildScrollView(
             child: Padding(
