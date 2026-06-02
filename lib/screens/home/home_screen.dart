@@ -317,7 +317,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
             centerTitle: true,
             actions: [
               IconButton(
-                icon: Icon(Icons.info_outline, color: Colors.grey.shade300),
+                icon: const Icon(Icons.info_outline, color: Colors.white),
                 onPressed: () {
                   showDialog(
                     context: context,
