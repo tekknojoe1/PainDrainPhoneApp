@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:haptic_feedback/haptic_feedback.dart';
 import 'package:location/location.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:pain_drain_mobile_app/providers/bluetooth_notifier.dart';
 import 'package:pain_drain_mobile_app/providers/temperature_notifier.dart';
 import 'package:pain_drain_mobile_app/providers/tens_notifier.dart';
@@ -37,6 +38,7 @@ class _ConnectDeviceState extends ConsumerState<ConnectDevice> with SingleTicker
   bool showCheckMark = false;
   bool showXMark =  false;
   bool isPulsing = false;
+  String _appVersion = '';
 
 
 
@@ -53,6 +55,9 @@ class _ConnectDeviceState extends ConsumerState<ConnectDevice> with SingleTicker
 
     _adapterStateStateSubscription = FlutterBluePlus.adapterState.listen((state) {
       _adapterState = state;
+    });
+    PackageInfo.fromPlatform().then((info) {
+      setState(() => _appVersion = info.version);
     });
     _animationController = AnimationController(vsync: this, duration: const Duration(seconds: 1));
     _animation = Tween<double>(begin: 0, end: 1).animate(
@@ -232,6 +237,28 @@ class _ConnectDeviceState extends ConsumerState<ConnectDevice> with SingleTicker
       body: Stack(
         children: [
           Positioned(
+            top: MediaQuery.of(context).padding.top + 8,
+            right: 8,
+            child: IconButton(
+              icon: const Icon(Icons.info_outline, color: Colors.grey),
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('App Version'),
+                    content: Text('Version $_appVersion'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('OK'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          Positioned(
             top: MediaQuery.of(context).size.height / 2 - 200, // Adjust the value as needed
             left: (MediaQuery.of(context).size.width - 180) / 2, // Adjust the value as needed
             child: SizedBox(
@@ -311,9 +338,9 @@ class _ConnectDeviceState extends ConsumerState<ConnectDevice> with SingleTicker
                             borderRadius: BorderRadius.circular(20.0),
                           ),
                         ),
-                        child: const Text(
-                          'CONNECT',
-                          style: TextStyle(fontSize: 18, color: Colors.white),
+                        child: Text(
+                          isPulsing ? 'CONNECTING' : 'CONNECT',
+                          style: const TextStyle(fontSize: 18, color: Colors.white),
                         ),
                       ),
                     ),
