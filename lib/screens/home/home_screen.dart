@@ -317,6 +317,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
             centerTitle: true,
             actions: [
               IconButton(
+                icon: const Icon(Icons.system_update, color: Colors.white),
+                tooltip: 'Firmware update',
+                onPressed: () => context.push('/ota'),
+              ),
+              IconButton(
                 icon: const Icon(Icons.info_outline, color: Colors.white),
                 onPressed: () {
                   showDialog(

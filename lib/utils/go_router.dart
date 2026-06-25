@@ -4,6 +4,7 @@ import 'package:pain_drain_mobile_app/screens/home/local_widgets/onboarding.dart
 
 import '../screens/connect_device/connect_to_device.dart';
 import '../screens/home/home_screen.dart';
+import '../screens/ota/ota_screen.dart';
 
 final routes = GoRouter(
   initialLocation: '/',
@@ -19,6 +20,10 @@ final routes = GoRouter(
     GoRoute(
       path: '/onboarding',
       builder: (context, state) => const OnBoarding(),
+    ),
+    GoRoute(
+      path: '/ota',
+      builder: (context, state) => const OtaScreen(),
     ),
   ],
 );

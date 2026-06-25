@@ -1,0 +1,126 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+
+import 'cyacd2_file.dart';
+import 'dfu_transfer.dart';
+import 'firmware_info.dart';
+
+/// BLE-level OTA operations: reading the running firmware/slot from the Device
+/// Information Service, and streaming a `.cyacd2` image to the Cypress
+/// Bootloader Service.
+///
+/// The device does NOT support pairing/bonding — like the existing control
+/// connection we simply connect and use GATT. We never call any pairing API; if
+/// the platform stack auto-pairs, that attempt is what the device rejects, so we
+/// keep to plain connect/discover/read/write here.
+class OtaService {
+  // Device Information Service (DIS).
+  static const String _disServiceUuid = '180a';
+  static const String _firmwareRevisionUuid = '2a26';
+
+  // Cypress Bootloader Service (BTS).
+  static const String _btsServiceUuid =
+      '00060000-f8ce-11e4-abf4-0002a5d5c51b';
+  static const String _btsCharacteristicUuid =
+      '00060001-f8ce-11e4-abf4-0002a5d5c51b';
+
+  /// PainDrain DFU product ID.
+  static const int productId = 0x01020304;
+
+  final void Function(String message)? log;
+
+  OtaService({this.log});
+
+  /// Reads and parses the DIS Firmware Revision String (e.g. `"1.1.0.6/0"`)
+  /// from an already-connected [device].
+  Future<FirmwareInfo> readFirmwareInfo(BluetoothDevice device) async {
+    final services = await device.discoverServices();
+    final dis = _findService(services, _disServiceUuid);
+    if (dis == null) {
+      throw StateError('Device Information Service (0x180A) not found');
+    }
+    final firmwareChar = dis.characteristics.firstWhere(
+      (c) => _matches(c.uuid, _firmwareRevisionUuid),
+      orElse: () =>
+          throw StateError('Firmware Revision String (0x2A26) not found'),
+    );
+    final raw = await firmwareChar.read();
+    final text = utf8.decode(raw, allowMalformed: true);
+    log?.call('DIS firmware revision: "$text"');
+    return FirmwareInfo.parse(text);
+  }
+
+  /// Streams [image] to the device's Bootloader Service and returns the result.
+  ///
+  /// On [DfuResultType.success] the device resets and the BLE link drops — call
+  /// [readFirmwareInfo] again after reconnecting to confirm the new version and
+  /// slot. A [DfuResultType.wrongSlot] result means the device refused the
+  /// write (wrong slot file / already current) and is unharmed.
+  Future<DfuResult> flashImage(
+    BluetoothDevice device,
+    Cyacd2File image, {
+    void Function(double progress)? onProgress,
+    DfuCancelToken? cancelToken,
+  }) async {
+    // A larger MTU dramatically reduces the number of Send Data packets.
+    var maxDataSize = 256;
+    try {
+      final mtu = await device.requestMtu(517);
+      // Reserve the 7-byte DFU framing plus a little ATT overhead headroom.
+      maxDataSize = (mtu - 12).clamp(16, 512);
+      log?.call('Negotiated MTU $mtu -> maxDataSize $maxDataSize');
+    } catch (e) {
+      log?.call('MTU request failed ($e); using default chunk size');
+    }
+
+    final services = await device.discoverServices();
+    final bts = _findService(services, _btsServiceUuid);
+    if (bts == null) {
+      throw StateError('Cypress Bootloader Service not found');
+    }
+    final command = bts.characteristics.firstWhere(
+      (c) => _matches(c.uuid, _btsCharacteristicUuid),
+      orElse: () =>
+          throw StateError('Bootloader command characteristic not found'),
+    );
+
+    // Enable notifications (CCCD) so we receive DFU response packets.
+    if (command.properties.notify || command.properties.indicate) {
+      await command.setNotifyValue(true);
+    }
+
+    final transfer = DfuTransfer(
+      characteristic: command,
+      productId: productId,
+      maxDataSize: maxDataSize,
+      log: log,
+    );
+
+    return transfer.run(
+      image,
+      onProgress: onProgress,
+      cancelToken: cancelToken,
+    );
+  }
+
+  BluetoothService? _findService(
+      List<BluetoothService> services, String uuid) {
+    for (final service in services) {
+      if (_matches(service.uuid, uuid)) return service;
+    }
+    return null;
+  }
+
+  /// Compares a discovered [Guid] against either a 16-bit short UUID (`"180a"`)
+  /// or a full 128-bit UUID string, case-insensitively.
+  bool _matches(Guid guid, String uuid) {
+    final a = guid.toString().toLowerCase();
+    final b = uuid.toLowerCase();
+    if (a == b) return true;
+    // flutter_blue_plus may expand short UUIDs to the full base UUID.
+    return a.replaceAll('-', '').endsWith(b.replaceAll('-', '')) ||
+        a.contains(b);
+  }
+}

@@ -1,0 +1,195 @@
+import 'dart:async';
+
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../models/ota_state.dart';
+import '../ota/dfu_transfer.dart';
+import '../ota/ota_service.dart';
+import '../ota/ota_source.dart';
+import '../ota/update_decision.dart';
+import 'bluetooth_notifier.dart';
+
+/// Kept-alive provider for the OTA flow. Hand-written (rather than codegen) so
+/// the feature does not depend on the build_runner toolchain — see [OtaState].
+final otaNotifierProvider =
+    NotifierProvider<OtaNotifier, OtaState>(OtaNotifier.new);
+
+/// Drives the OTA flow on top of the existing BLE connection:
+/// check -> (offer) -> update -> reconnect & verify.
+class OtaNotifier extends Notifier<OtaState> {
+  final OtaService _service = OtaService(log: _log);
+  final OtaSource _source = const BundledOtaSource();
+  DfuCancelToken? _cancelToken;
+
+  static void _log(String message) {
+    // ignore: avoid_print
+    print('[OTA] $message');
+  }
+
+  @override
+  OtaState build() => const OtaState();
+
+  BluetoothDevice? get _device =>
+      ref.read(bluetoothNotifierProvider).connectedDevice;
+
+  /// Reads the running firmware/slot, loads the bundled artifact, and decides
+  /// whether an update is available.
+  Future<void> checkForUpdate() async {
+    final device = _device;
+    if (device == null) {
+      state = state.copyWith(
+        status: OtaStatus.failed,
+        message: 'No device connected',
+      );
+      return;
+    }
+
+    state = state.copyWith(status: OtaStatus.checking, message: null);
+    try {
+      final firmware = await _service.readFirmwareInfo(device);
+      final package = await _source.load();
+      final decision = decideUpdate(
+        deviceVersion: firmware.version,
+        manifestVersion: package.manifest.version,
+      );
+
+      switch (decision) {
+        case UpdateStatus.updateAvailable:
+          state = state.copyWith(
+            status: OtaStatus.updateAvailable,
+            currentFirmware: firmware,
+            manifest: package.manifest,
+            message: 'Update available: '
+                '${firmware.versionString} → ${package.manifest.firmwareVersion}',
+          );
+          break;
+        case UpdateStatus.upToDate:
+          state = state.copyWith(
+            status: OtaStatus.upToDate,
+            currentFirmware: firmware,
+            manifest: package.manifest,
+            message: 'Firmware is up to date (${firmware.versionString})',
+          );
+          break;
+        case UpdateStatus.downgrade:
+          state = state.copyWith(
+            status: OtaStatus.upToDate,
+            currentFirmware: firmware,
+            manifest: package.manifest,
+            message: 'Device firmware (${firmware.versionString}) is newer '
+                'than the bundled image (${package.manifest.firmwareVersion})',
+          );
+          break;
+      }
+    } catch (e) {
+      state = state.copyWith(
+        status: OtaStatus.failed,
+        message: 'Could not check for updates: $e',
+      );
+    }
+  }
+
+  /// Flashes the image for the device's inactive slot, then reconnects and
+  /// re-reads the DIS to confirm the new version.
+  Future<void> startUpdate() async {
+    final device = _device;
+    final firmware = state.currentFirmware;
+    if (device == null || firmware == null) {
+      state = state.copyWith(
+        status: OtaStatus.failed,
+        message: 'Run a check before updating',
+      );
+      return;
+    }
+
+    _cancelToken = DfuCancelToken();
+    state = state.copyWith(
+      status: OtaStatus.updating,
+      progress: 0,
+      message: 'Preparing image for slot ${firmware.inactiveSlot}…',
+    );
+
+    try {
+      final package = await _source.load();
+      final image = package.imageForSlot(firmware.inactiveSlot);
+
+      final result = await _service.flashImage(
+        device,
+        image,
+        cancelToken: _cancelToken,
+        onProgress: (p) {
+          state = state.copyWith(status: OtaStatus.updating, progress: p);
+        },
+      );
+
+      switch (result.type) {
+        case DfuResultType.success:
+          state = state.copyWith(
+            status: OtaStatus.success,
+            progress: 1,
+            message: 'Update sent. Device is restarting…',
+          );
+          await _verifyAfterReset(device);
+          break;
+        case DfuResultType.wrongSlot:
+          // Device refused the write and is unharmed — re-read and re-decide.
+          state = state.copyWith(
+            status: OtaStatus.wrongSlot,
+            message: result.message ?? 'Wrong slot file; re-checking…',
+          );
+          await checkForUpdate();
+          break;
+        case DfuResultType.failed:
+          state = state.copyWith(
+            status: OtaStatus.failed,
+            message: result.message ?? 'Update failed',
+          );
+          break;
+      }
+    } catch (e) {
+      state = state.copyWith(
+        status: OtaStatus.failed,
+        message: 'Update failed: $e',
+      );
+    } finally {
+      _cancelToken = null;
+    }
+  }
+
+  /// Cancels an in-progress transfer.
+  void cancel() => _cancelToken?.cancel();
+
+  /// After the device resets into the new slot, reconnect and re-read the DIS
+  /// to confirm success and refresh the displayed version/slot.
+  Future<void> _verifyAfterReset(BluetoothDevice device) async {
+    // The device drops the link as it resets — give it a moment to reboot.
+    await Future<void>.delayed(const Duration(seconds: 3));
+
+    for (var attempt = 0; attempt < 5; attempt++) {
+      try {
+        if (device.isDisconnected) {
+          await device.connect(timeout: const Duration(seconds: 10));
+        }
+        final firmware = await _service.readFirmwareInfo(device);
+        state = state.copyWith(
+          status: OtaStatus.success,
+          currentFirmware: firmware,
+          message: 'Updated to ${firmware.versionString} '
+              '(slot ${firmware.runningSlot})',
+        );
+        return;
+      } catch (e) {
+        _log('Verify attempt ${attempt + 1} failed: $e');
+        await Future<void>.delayed(const Duration(seconds: 3));
+      }
+    }
+
+    // The flash itself succeeded; we just could not auto-reconnect to confirm.
+    state = state.copyWith(
+      status: OtaStatus.success,
+      message: 'Update sent. Reconnect to the device to confirm the new '
+          'version.',
+    );
+  }
+}
