@@ -64,16 +64,17 @@ class OtaService {
     void Function(double progress)? onProgress,
     DfuCancelToken? cancelToken,
   }) async {
-    // A larger MTU dramatically reduces the number of Send Data packets.
-    var maxDataSize = 256;
+    // Request a larger MTU for throughput (fewer ATT fragments). The transfer
+    // uses long writes, so the chunk size below is bounded by the bootloader's
+    // packet buffer, NOT the MTU — don't derive it from the negotiated MTU
+    // (doing so could force chunks that overflow a small-MTU write).
     try {
       final mtu = await device.requestMtu(517);
-      // Reserve the 7-byte DFU framing plus a little ATT overhead headroom.
-      maxDataSize = (mtu - 12).clamp(16, 512);
-      log?.call('Negotiated MTU $mtu -> maxDataSize $maxDataSize');
+      log?.call('Negotiated MTU $mtu');
     } catch (e) {
-      log?.call('MTU request failed ($e); using default chunk size');
+      log?.call('MTU request failed ($e)');
     }
+    const maxDataSize = 256;
 
     final services = await device.discoverServices();
     final bts = _findService(services, _btsServiceUuid);

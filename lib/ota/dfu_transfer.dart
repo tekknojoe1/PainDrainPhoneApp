@@ -248,18 +248,26 @@ class DfuTransfer {
     bool expectResponse = true,
   }) async {
     final packet = codec.buildPacket(command, data);
-    final useWriteWithoutResponse =
-        characteristic.properties.writeWithoutResponse;
 
     if (!expectResponse) {
-      await characteristic.write(packet,
-          withoutResponse: useWriteWithoutResponse);
+      // Fire-and-forget (Exit): the device resets immediately, so the ATT
+      // response may never arrive — write without response.
+      await characteristic.write(packet, withoutResponse: true);
       return DfuResponse(status: DfuStatus.success, data: Uint8List(0));
     }
 
+    // Write WITH response, using a queued (long) write for any packet larger
+    // than the minimum ATT payload (MTU-3 = 20 bytes at the default 23-byte
+    // MTU). Write-without-response is hard-capped at that size and would throw
+    // "data longer than allowed"; long writes are not, regardless of MTU. This
+    // mirrors the existing control-path writes in bluetooth_notifier.
     final completer = Completer<DfuResponse>();
     _pending = completer;
-    await characteristic.write(packet, withoutResponse: useWriteWithoutResponse);
+    await characteristic.write(
+      packet,
+      withoutResponse: false,
+      allowLongWrite: packet.length > 20,
+    );
     return completer.future.timeout(responseTimeout);
   }
 
