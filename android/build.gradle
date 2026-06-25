@@ -8,6 +8,19 @@ allprojects {
 rootProject.buildDir = '../build'
 subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
+
+    // Several plugins inherit an old flutter.compileSdkVersion and trip AGP's
+    // dependency checks (e.g. flutter_blue_plus needs 34+ via androidx
+    // exifinterface, flutter_keyboard_visibility was built against 31). Bump
+    // plugin modules to a modern compileSdk. Registered before the
+    // evaluationDependsOn(':app') below evaluates :app.
+    afterEvaluate { project ->
+        if (project.hasProperty('android')) {
+            project.android {
+                compileSdkVersion 35
+            }
+        }
+    }
 }
 subprojects {
     project.evaluationDependsOn(':app')

@@ -40,7 +40,7 @@ dependencies:
   syncfusion_flutter_sliders: ^24.2.9
   
   percent_indicator: ^4.2.3
-  package_info_plus: ^5.0.1
+  package_info_plus: ^8.3.0   # 5.0.1's Kotlin fails to compile against modern compileSdk
   dropdown_button2: ^2.3.8
   syncfusion_flutter_core: ^24.2.9
   flutter_xlider: ^3.5.0
