@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -52,6 +53,13 @@ class DfuTransfer {
     this.codec = const DfuCodec(),
     this.mtu = 23,
     this.includeRowCrc = true,
+    // Pipelining (window > 1) deterministically corrupts a write on this
+    // bootloader/BLE-stack once a row's burst passes ~37 packets (ERR_CHECKSUM
+    // at a fixed offset, unrecoverable by Sync+retry), whereas serial sends all
+    // 39 Send Data per row reliably. So default to serial; the real speed fix is
+    // a larger device MTU (CY_BLE_CONFIG_GATT_MTU), which cuts the packet count.
+    this.inFlightWindow = 1,
+    this.maxRowRetries = 3,
     this.responseTimeout = const Duration(seconds: 5),
     this.log,
   });
@@ -85,9 +93,24 @@ class DfuTransfer {
   final Duration responseTimeout;
   final void Function(String message)? log;
 
+  /// Maximum number of row packets sent before their status notifications are
+  /// awaited (flow-controlled pipelining). 1 is fully serial; a small window
+  /// overlaps round-trips for speed without overrunning the bootloader (an
+  /// unbounded blast corrupts its packet buffer -> ERR_CHECKSUM).
+  final int inFlightWindow;
+
+  /// How many times to Sync + re-send a row that fails with a recoverable error
+  /// (e.g. a checksum/length error from a dropped or out-of-order packet under
+  /// pipelining) before giving up.
+  final int maxRowRetries;
+
   StreamSubscription<List<int>>? _sub;
   final List<int> _rxBuffer = [];
-  Completer<DfuResponse>? _pending;
+
+  /// Outstanding command responses, in send order. Pipelining (firing several
+  /// writes before awaiting their notifications) relies on the device
+  /// responding in order, so responses are matched to writes FIFO.
+  final Queue<Completer<DfuResponse>> _pending = Queue();
 
   /// Runs the full Enter -> (Set Metadata) -> Program rows -> Verify -> Exit
   /// sequence for [image]. Reports fraction-complete (0..1) via [onProgress].
@@ -146,14 +169,29 @@ class DfuTransfer {
           return _fail('Cancelled by user');
         }
         final row = image.rows[rowIndex];
-        final r = await _programRow(row);
+
+        // Pipelining can occasionally desync the bootloader (a dropped/extra
+        // notification or an overrun) -> a checksum/length error. Recover by
+        // issuing a Sync (resets the device's receive state) and re-sending the
+        // whole row, since its accumulation is discarded.
+        var r = await _programRow(row);
+        var attempt = 0;
+        while (r.status != DfuStatus.success &&
+            r.status != DfuStatus.errRowAccess &&
+            attempt < maxRowRetries) {
+          attempt++;
+          log?.call('Row $rowIndex ${r.where} -> ${_statusDetail(r.status)}; '
+              'resync + retry $attempt/$maxRowRetries');
+          await _resync();
+          r = await _programRow(row);
+        }
 
         if (r.status != DfuStatus.success) {
-          // Only the device's row-access rejection means it refused a write
-          // into its running slot: wrong slot file (or already up to date). The
-          // device is unharmed and stays on its current firmware. Any other
-          // status is a genuine failure — surface it (with the code, the
-          // failing sub-command, and the MTU) so it is not silently swallowed.
+          // The device's row-access rejection means it refused a write into its
+          // running slot: wrong slot file (or already up to date). The device is
+          // unharmed and stays on its current firmware. Anything else is a
+          // genuine failure — surface it (status code, failing sub-command, MTU)
+          // so it is not silently swallowed.
           if (r.status == DfuStatus.errRowAccess) {
             log?.call('Row $rowIndex row-access denied -> wrong slot file');
             return DfuResult(
@@ -164,8 +202,8 @@ class DfuTransfer {
             );
           }
           return _fail(
-            'Row $rowIndex ${r.where} failed: ${_statusDetail(r.status)} '
-            '[MTU $mtu]',
+            'Row $rowIndex ${r.where} failed after $attempt retries: '
+            '${_statusDetail(r.status)} [MTU $mtu]',
           );
         }
 
@@ -204,8 +242,13 @@ class DfuTransfer {
 
   /// Programs one row: stream all but the final piece via Send Data, then commit
   /// with Program Data ([address][crc?][last piece]). Every packet is sized to a
-  /// single MTU-bounded write. Returns the DFU status plus a short description of
-  /// the command that produced it (for diagnostics).
+  /// single MTU-bounded write.
+  ///
+  /// The whole row is *pipelined*: all packets are fired back-to-back (paced by
+  /// the BLE write hand-off, so several ride each connection interval) and their
+  /// status notifications are awaited afterward, in order. This is what makes a
+  /// row take roughly one batch of writes instead of ~40 serial round-trips.
+  /// Returns the DFU status plus a short description of the failing command.
   Future<({int status, String where})> _programRow(Cyacd2Row row) async {
     final data = row.data;
     final sendChunk = _maxPacket - 7; // framing
@@ -219,28 +262,60 @@ class DfuTransfer {
     // rest with Send Data.
     final progTail = math.min(progChunk, data.length);
     final sendEnd = data.length - progTail;
+
+    // Build the row's ordered packet list.
+    final packets = <({int command, List<int> data, String where})>[];
     var offset = 0;
     while (offset < sendEnd) {
       final n = math.min(sendChunk, sendEnd - offset);
-      final chunk = data.sublist(offset, offset + n);
-      final pkt = codec.buildPacket(DfuCommand.sendData, chunk);
-      // Fire Send Data without waiting for the ATT write-ack (we still await the
-      // bootloader's status notification), saving a round-trip per chunk.
-      final resp = await _send(DfuCommand.sendData, chunk, withoutResponseWrite: true);
-      if (!resp.isSuccess) {
-        return (status: resp.status, where: 'SendData ${n}B (pkt ${pkt.length}B)');
-      }
+      packets.add((
+        command: DfuCommand.sendData,
+        data: data.sublist(offset, offset + n),
+        where: 'SendData @$offset ${n}B',
+      ));
       offset += n;
     }
+    packets.add((
+      command: DfuCommand.programData,
+      data: <int>[
+        ...u32le(row.address),
+        if (includeRowCrc) ...u32le(dfuRowCrc32(data)),
+        ...data.sublist(sendEnd),
+      ],
+      where: 'ProgramData ${progTail}B',
+    ));
 
-    final payload = <int>[
-      ...u32le(row.address),
-      if (includeRowCrc) ...u32le(dfuRowCrc32(data)),
-      ...data.sublist(sendEnd),
-    ];
-    final pkt = codec.buildPacket(DfuCommand.programData, payload);
-    final resp = await _send(DfuCommand.programData, payload);
-    return (status: resp.status, where: 'ProgramData ${progTail}B (pkt ${pkt.length}B)');
+    // Send with a bounded in-flight window: keep at most [inFlightWindow]
+    // packets outstanding, awaiting the oldest response before firing more.
+    final inFlight = Queue<({Future<DfuResponse> future, String where})>();
+    ({int status, String where})? failure;
+
+    Future<void> awaitOldest() async {
+      final r = inFlight.removeFirst();
+      if (failure != null) {
+        r.future.then((_) {}, onError: (_) {}); // swallow; row already failed
+        return;
+      }
+      try {
+        final resp = await r.future.timeout(responseTimeout);
+        if (!resp.isSuccess) failure = (status: resp.status, where: r.where);
+      } on TimeoutException {
+        failure = (status: DfuStatus.errUnknown, where: '${r.where} (timeout)');
+      }
+    }
+
+    for (final p in packets) {
+      if (failure != null) break;
+      final future =
+          await _fire(p.command, p.data, withoutResponseWrite: true);
+      inFlight.add((future: future, where: p.where));
+      if (inFlight.length >= inFlightWindow) await awaitOldest();
+    }
+    while (inFlight.isNotEmpty) {
+      await awaitOldest();
+    }
+
+    return failure ?? (status: DfuStatus.success, where: 'row');
   }
 
   // --- BLE transport ------------------------------------------------------
@@ -251,48 +326,67 @@ class DfuTransfer {
 
   void _onData(List<int> value) {
     _rxBuffer.addAll(value);
-    // A DFU response is [SOP][status][lenLo][lenHi][data][cksum 2][EOP].
-    if (_rxBuffer.length < 7) return;
-    final length = _rxBuffer[2] | (_rxBuffer[3] << 8);
-    final expected = 7 + length;
-    if (_rxBuffer.length < expected) return;
+    // A response is [SOP][status][lenLo][lenHi][data][cksum 2][EOP]. The device
+    // may pack several responses into one notification when pipelined, so drain
+    // every complete frame and match each to the next outstanding write.
+    while (true) {
+      if (_rxBuffer.length < 7) return;
+      final length = _rxBuffer[2] | (_rxBuffer[3] << 8);
+      final expected = 7 + length;
+      if (_rxBuffer.length < expected) return;
 
-    final frame = _rxBuffer.sublist(0, expected);
-    _rxBuffer.removeRange(0, expected);
+      final frame = _rxBuffer.sublist(0, expected);
+      _rxBuffer.removeRange(0, expected);
 
-    final pending = _pending;
-    if (pending == null || pending.isCompleted) return;
-    try {
-      pending.complete(codec.parseResponse(frame));
-    } catch (e) {
-      pending.completeError(e);
+      if (_pending.isEmpty) continue; // unexpected/extra response — discard
+      final completer = _pending.removeFirst();
+      if (completer.isCompleted) continue;
+      try {
+        completer.complete(codec.parseResponse(frame));
+      } catch (e) {
+        completer.completeError(e);
+      }
     }
   }
 
+  /// Writes one command packet and returns a future for its status
+  /// notification, without awaiting it — so callers can fire several packets
+  /// back-to-back (pipelining) and await the responses afterward. The write
+  /// itself is awaited, which paces sending to the BLE link rate.
+  ///
+  /// Packets are pre-chunked to fit MTU-3 (the bootloader rejects queued/long
+  /// writes), and [withoutResponseWrite] skips the ATT write-ack for throughput;
+  /// the bootloader's status notification is still what we match on.
+  Future<Future<DfuResponse>> _fire(
+    int command,
+    List<int> data, {
+    bool withoutResponseWrite = false,
+  }) async {
+    final packet = codec.buildPacket(command, data);
+    final completer = Completer<DfuResponse>();
+    _pending.add(completer);
+    await characteristic.write(packet, withoutResponse: withoutResponseWrite);
+    return completer.future;
+  }
+
+  /// Sends a single command and awaits its response (used for the one-off
+  /// Enter / Set Metadata / Verify commands; row data is pipelined instead).
   Future<DfuResponse> _send(
     int command,
     List<int> data, {
     bool expectResponse = true,
-    bool withoutResponseWrite = false,
   }) async {
-    final packet = codec.buildPacket(command, data);
-
     if (!expectResponse) {
       // Fire-and-forget (Exit): the device resets immediately, so the ATT
       // response may never arrive — write without response.
-      await characteristic.write(packet, withoutResponse: true);
+      await characteristic.write(
+        codec.buildPacket(command, data),
+        withoutResponse: true,
+      );
       return DfuResponse(status: DfuStatus.success, data: Uint8List(0));
     }
-
-    // Packets are pre-chunked to fit MTU-3, so we never need allowLongWrite (the
-    // bootloader characteristic does not accept queued writes — that caused
-    // ERR_LENGTH on the first >20-byte row write). [withoutResponseWrite] skips
-    // the ATT write-ack for throughput on Send Data; we still await the
-    // bootloader's status notification below.
-    final completer = Completer<DfuResponse>();
-    _pending = completer;
-    await characteristic.write(packet, withoutResponse: withoutResponseWrite);
-    return completer.future.timeout(responseTimeout);
+    final response = await _fire(command, data);
+    return response.timeout(responseTimeout);
   }
 
   /// "<description> (0xNN)" — always includes the raw status code so unexpected
@@ -306,10 +400,39 @@ class DfuTransfer {
     return DfuResult(DfuResultType.failed, message: message);
   }
 
+  /// Recovers the bootloader's receive state after a row failure: abandons any
+  /// outstanding responses, sends the Sync command (which resets the device's
+  /// command parser and discards its partial row buffer), and drops any stale
+  /// notifications. After this the row can be re-sent cleanly.
+  Future<void> _resync() async {
+    for (final completer in _pending) {
+      if (!completer.isCompleted) {
+        completer.completeError(StateError('resync'));
+      }
+    }
+    _pending.clear();
+    _rxBuffer.clear();
+    try {
+      await characteristic.write(
+        codec.buildPacket(DfuCommand.sync),
+        withoutResponse: true,
+      );
+    } catch (_) {
+      // Best effort — Sync has no response and the device may be mid-reset.
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    _rxBuffer.clear(); // discard notifications from the aborted row
+  }
+
   Future<void> _stop() async {
     await _sub?.cancel();
     _sub = null;
     _rxBuffer.clear();
-    _pending = null;
+    for (final completer in _pending) {
+      if (!completer.isCompleted) {
+        completer.completeError(StateError('DFU transfer stopped'));
+      }
+    }
+    _pending.clear();
   }
 }
