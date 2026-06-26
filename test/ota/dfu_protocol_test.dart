@@ -67,10 +67,19 @@ void main() {
       expect(dfuCrc16([0x01, 0x38, 0x00, 0x00]), crc);
     });
 
-    test('row crc32 is 32-bit and deterministic', () {
-      final crc = dfuRowCrc32([0xDE, 0xAD, 0xBE, 0xEF]);
-      expect(crc, inInclusiveRange(0, 0xFFFFFFFF));
-      expect(dfuRowCrc32([0xDE, 0xAD, 0xBE, 0xEF]), crc);
+    // Known-answer vectors over the ASCII string "123456789".
+    final check = '123456789'.codeUnits;
+
+    test('CRC-32C (Castagnoli) matches the standard check value', () {
+      expect(dfuCrc32c(check), 0xE3069283);
+    });
+
+    test('IEEE CRC-32 matches the standard check value', () {
+      expect(dfuCrc32Ieee(check), 0xCBF43926);
+    });
+
+    test('row crc32 uses CRC-32C (the cy_bootload variant)', () {
+      expect(dfuRowCrc32(check), dfuCrc32c(check));
     });
   });
 

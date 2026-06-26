@@ -176,10 +176,10 @@ class _OtaScreenState extends ConsumerState<OtaScreen> {
         return _primaryButton('Retry', AppColors.blue, notifier.checkForUpdate);
       case OtaStatus.success:
       case OtaStatus.upToDate:
+      case OtaStatus.wrongSlot:
         return _primaryButton(
             'Check again', Colors.blue.shade800, notifier.checkForUpdate);
       case OtaStatus.checking:
-      case OtaStatus.wrongSlot:
         return const SizedBox.shrink();
       case OtaStatus.idle:
         return _primaryButton(

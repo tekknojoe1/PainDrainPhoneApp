@@ -133,12 +133,14 @@ class OtaNotifier extends Notifier<OtaState> {
           await _verifyAfterReset(device);
           break;
         case DfuResultType.wrongSlot:
-          // Device refused the write and is unharmed — re-read and re-decide.
+          // Device refused the write and is unharmed. Surface the message and
+          // stop — do NOT auto re-check (that would overwrite this state and
+          // silently bounce back to "update available" with no explanation).
+          // The user can re-check from the screen.
           state = state.copyWith(
             status: OtaStatus.wrongSlot,
-            message: result.message ?? 'Wrong slot file; re-checking…',
+            message: result.message ?? 'Wrong slot file or already up to date.',
           );
-          await checkForUpdate();
           break;
         case DfuResultType.failed:
           state = state.copyWith(

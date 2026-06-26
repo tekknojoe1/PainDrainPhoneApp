@@ -199,15 +199,28 @@ int dfuCrc16(List<int> bytes) {
   return ((crc << 8) | (crc >> 8)) & 0xFFFF;
 }
 
-/// IEEE 802.3 CRC-32 (reflected poly 0xEDB88320, init/final 0xFFFFFFFF) used to
-/// guard each programmed row in Program/Verify Data commands.
-int dfuRowCrc32(List<int> bytes) {
+/// CRC-32 guarding each row in Program/Verify Data commands.
+///
+/// The PainDrain bootloader (cy_bootload) uses CRC-32C / Castagnoli — its
+/// metadata CRC is documented as CRC-32C (bootload_user.h) and the same routine
+/// guards programmed rows. If a device ever returns a checksum/data error on an
+/// otherwise correctly-framed row, swap this to [dfuCrc32Ieee] to rule out the
+/// polynomial.
+int dfuRowCrc32(List<int> bytes) => dfuCrc32c(bytes);
+
+/// CRC-32C / Castagnoli: reflected poly 0x82F63B78, init/final 0xFFFFFFFF.
+int dfuCrc32c(List<int> bytes) => _crc32(bytes, 0x82F63B78);
+
+/// IEEE 802.3 CRC-32: reflected poly 0xEDB88320, init/final 0xFFFFFFFF.
+int dfuCrc32Ieee(List<int> bytes) => _crc32(bytes, 0xEDB88320);
+
+int _crc32(List<int> bytes, int reflectedPoly) {
   var crc = 0xFFFFFFFF;
   for (final byte in bytes) {
     crc ^= byte & 0xFF;
     for (var i = 0; i < 8; i++) {
       if ((crc & 1) != 0) {
-        crc = (crc >> 1) ^ 0xEDB88320;
+        crc = (crc >> 1) ^ reflectedPoly;
       } else {
         crc >>= 1;
       }

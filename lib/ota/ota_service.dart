@@ -64,17 +64,32 @@ class OtaService {
     void Function(double progress)? onProgress,
     DfuCancelToken? cancelToken,
   }) async {
-    // Request a larger MTU for throughput (fewer ATT fragments). The transfer
-    // uses long writes, so the chunk size below is bounded by the bootloader's
-    // packet buffer, NOT the MTU — don't derive it from the negotiated MTU
-    // (doing so could force chunks that overflow a small-MTU write).
+    // Request a larger MTU for throughput — each DFU packet is chunked to fit a
+    // single MTU-bounded write (the bootloader characteristic rejects long
+    // writes), so a bigger MTU directly means bigger, faster chunks.
+    var mtu = 23;
     try {
-      final mtu = await device.requestMtu(517);
-      log?.call('Negotiated MTU $mtu');
+      mtu = await device.requestMtu(517);
     } catch (e) {
+      try {
+        mtu = device.mtuNow;
+      } catch (_) {}
       log?.call('MTU request failed ($e)');
     }
-    const maxDataSize = 256;
+    log?.call('Using MTU $mtu (max write ${mtu - 3} bytes)');
+
+    // The bootloader fixes its MTU at 23 (CY_BLE_CONFIG_GATT_MTU), so each write
+    // is tiny and the transfer is dominated by round-trip latency. Ask for a
+    // high-priority connection to shrink the connection interval (Android only;
+    // a no-op elsewhere).
+    try {
+      await device.requestConnectionPriority(
+        connectionPriorityRequest: ConnectionPriority.high,
+      );
+      log?.call('Requested high-priority (fast) connection');
+    } catch (e) {
+      log?.call('Connection priority request failed ($e)');
+    }
 
     final services = await device.discoverServices();
     final bts = _findService(services, _btsServiceUuid);
@@ -95,7 +110,7 @@ class OtaService {
     final transfer = DfuTransfer(
       characteristic: command,
       productId: productId,
-      maxDataSize: maxDataSize,
+      mtu: mtu,
       log: log,
     );
 

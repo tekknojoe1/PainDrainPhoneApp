@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -49,9 +50,8 @@ class DfuTransfer {
     required this.characteristic,
     required this.productId,
     this.codec = const DfuCodec(),
-    this.maxDataSize = 256,
-    this.includeRowCrc = false,
-    this.earlyRowThreshold = 4,
+    this.mtu = 23,
+    this.includeRowCrc = true,
     this.responseTimeout = const Duration(seconds: 5),
     this.log,
   });
@@ -64,18 +64,23 @@ class DfuTransfer {
 
   final DfuCodec codec;
 
-  /// Max payload bytes per Send Data packet. Bounded by the negotiated ATT MTU
-  /// minus the 7-byte DFU framing; the service layer requests a large MTU.
-  final int maxDataSize;
+  /// Negotiated ATT MTU. The bootloader characteristic does NOT accept queued
+  /// (long) writes — only the small Enter/Metadata/Verify packets (≤ MTU-3)
+  /// were getting through, while the first >MTU-3 row write was rejected. So
+  /// every DFU packet, including row data, is chunked to fit a single write of
+  /// at most MTU-3 bytes. A larger negotiated MTU simply means bigger (faster)
+  /// chunks.
+  final int mtu;
 
-  /// Whether Program/Verify Data carry a CRC-32 of the row. PainDrain `.cyacd2`
-  /// rows are address+data with no embedded checksum, so this is `false`.
+  /// Largest single BLE write payload: ATT MTU minus the 3-byte ATT header,
+  /// bounded by the 512-byte attribute limit.
+  int get _maxPacket => (mtu - 3).clamp(20, 512);
+
+  /// Whether Program/Verify Data carry a CRC-32 of the row. The cy_bootload
+  /// Program Data command is [address 4][row CRC-32 4][data]; omitting the CRC
+  /// makes the device read the first 4 data bytes as the CRC and reject the
+  /// row as ERR_LENGTH. So this is `true` (CRC is CRC-32C, see dfuRowCrc32).
   final bool includeRowCrc;
-
-  /// A program-row rejection at or before this row index is treated as
-  /// "wrong slot file / already up to date" rather than a failure — the device
-  /// refuses writes into its running slot at the very start of the transfer.
-  final int earlyRowThreshold;
 
   final Duration responseTimeout;
   final void Function(String message)? log;
@@ -103,8 +108,10 @@ class DfuTransfer {
         u32le(image.productId ?? productId),
       );
       if (!enter.isSuccess) {
-        return _fail('Enter DFU rejected: ${DfuStatus.describe(enter.status)}');
+        return _fail('Enter DFU rejected: ${_statusDetail(enter.status)}');
       }
+      log?.call('Entered DFU; programming ${image.rows.length} rows '
+          '(appId $appId, ${image.totalDataBytes} bytes)');
 
       // --- Set Application Metadata (app start + size from @APPINFO) --------
       if (image.appInfoAddress != null && image.appInfoSize != null) {
@@ -118,7 +125,7 @@ class DfuTransfer {
         final metaResp = await _send(DfuCommand.setAppMetadata, meta);
         if (!metaResp.isSuccess) {
           return _fail(
-            'Set metadata failed: ${DfuStatus.describe(metaResp.status)}',
+            'Set metadata failed: ${_statusDetail(metaResp.status)}',
           );
         }
       }
@@ -127,7 +134,7 @@ class DfuTransfer {
       if (image.eiv != null && image.eiv!.isNotEmpty) {
         final eivResp = await _send(DfuCommand.setEiv, image.eiv!);
         if (!eivResp.isSuccess) {
-          return _fail('Set EIV failed: ${DfuStatus.describe(eivResp.status)}');
+          return _fail('Set EIV failed: ${_statusDetail(eivResp.status)}');
         }
       }
 
@@ -139,25 +146,26 @@ class DfuTransfer {
           return _fail('Cancelled by user');
         }
         final row = image.rows[rowIndex];
-        final status = await _programRow(row);
+        final r = await _programRow(row);
 
-        if (status != DfuStatus.success) {
-          // A rejection right at the start of the transfer means the device
-          // refused a write into its running slot: wrong slot file (or already
-          // up to date). The device is unharmed and stays on its current
-          // firmware — never report this as a brick.
-          final isEarly = rowIndex <= earlyRowThreshold;
-          if (status == DfuStatus.errRowAccess || isEarly) {
-            log?.call('Row $rowIndex rejected (${DfuStatus.describe(status)})'
-                ' -> wrong slot file');
-            return const DfuResult(
+        if (r.status != DfuStatus.success) {
+          // Only the device's row-access rejection means it refused a write
+          // into its running slot: wrong slot file (or already up to date). The
+          // device is unharmed and stays on its current firmware. Any other
+          // status is a genuine failure — surface it (with the code, the
+          // failing sub-command, and the MTU) so it is not silently swallowed.
+          if (r.status == DfuStatus.errRowAccess) {
+            log?.call('Row $rowIndex row-access denied -> wrong slot file');
+            return DfuResult(
               DfuResultType.wrongSlot,
-              message: 'Device refused the write — wrong slot file or already '
-                  'up to date.',
+              message: 'Device refused the write at row $rowIndex '
+                  '(${_statusDetail(r.status)}) — wrong slot file or already up '
+                  'to date.',
             );
           }
           return _fail(
-            'Program row $rowIndex failed: ${DfuStatus.describe(status)}',
+            'Row $rowIndex ${r.where} failed: ${_statusDetail(r.status)} '
+            '[MTU $mtu]',
           );
         }
 
@@ -171,7 +179,7 @@ class DfuTransfer {
       final verify = await _send(DfuCommand.verifyApp, [appId]);
       if (!verify.isSuccess) {
         return _fail('Verify application failed: '
-            '${DfuStatus.describe(verify.status)}');
+            '${_statusDetail(verify.status)}');
       }
 
       // --- Exit (device resets and boots the new slot) --------------------
@@ -194,26 +202,45 @@ class DfuTransfer {
     }
   }
 
-  /// Programs one row: stream the data in [maxDataSize] chunks via Send Data,
-  /// then commit it with Program Data carrying the address (+ optional CRC-32).
-  Future<int> _programRow(Cyacd2Row row) async {
+  /// Programs one row: stream all but the final piece via Send Data, then commit
+  /// with Program Data ([address][crc?][last piece]). Every packet is sized to a
+  /// single MTU-bounded write. Returns the DFU status plus a short description of
+  /// the command that produced it (for diagnostics).
+  Future<({int status, String where})> _programRow(Cyacd2Row row) async {
     final data = row.data;
-    var offset = 0;
-    while (data.length - offset > maxDataSize) {
-      final chunk = data.sublist(offset, offset + maxDataSize);
-      final resp = await _send(DfuCommand.sendData, chunk);
-      if (!resp.isSuccess) return resp.status;
-      offset += maxDataSize;
+    final sendChunk = _maxPacket - 7; // framing
+    final progOverhead = 7 + 4 + (includeRowCrc ? 4 : 0); // framing+addr+crc
+    final progChunk = _maxPacket - progOverhead;
+    if (progChunk < 1) {
+      return (status: DfuStatus.errLength, where: 'MTU $mtu too small');
     }
 
-    final tail = data.sublist(offset);
+    // Reserve the last progChunk bytes for the Program Data packet; stream the
+    // rest with Send Data.
+    final progTail = math.min(progChunk, data.length);
+    final sendEnd = data.length - progTail;
+    var offset = 0;
+    while (offset < sendEnd) {
+      final n = math.min(sendChunk, sendEnd - offset);
+      final chunk = data.sublist(offset, offset + n);
+      final pkt = codec.buildPacket(DfuCommand.sendData, chunk);
+      // Fire Send Data without waiting for the ATT write-ack (we still await the
+      // bootloader's status notification), saving a round-trip per chunk.
+      final resp = await _send(DfuCommand.sendData, chunk, withoutResponseWrite: true);
+      if (!resp.isSuccess) {
+        return (status: resp.status, where: 'SendData ${n}B (pkt ${pkt.length}B)');
+      }
+      offset += n;
+    }
+
     final payload = <int>[
       ...u32le(row.address),
       if (includeRowCrc) ...u32le(dfuRowCrc32(data)),
-      ...tail,
+      ...data.sublist(sendEnd),
     ];
+    final pkt = codec.buildPacket(DfuCommand.programData, payload);
     final resp = await _send(DfuCommand.programData, payload);
-    return resp.status;
+    return (status: resp.status, where: 'ProgramData ${progTail}B (pkt ${pkt.length}B)');
   }
 
   // --- BLE transport ------------------------------------------------------
@@ -246,6 +273,7 @@ class DfuTransfer {
     int command,
     List<int> data, {
     bool expectResponse = true,
+    bool withoutResponseWrite = false,
   }) async {
     final packet = codec.buildPacket(command, data);
 
@@ -256,20 +284,22 @@ class DfuTransfer {
       return DfuResponse(status: DfuStatus.success, data: Uint8List(0));
     }
 
-    // Write WITH response, using a queued (long) write for any packet larger
-    // than the minimum ATT payload (MTU-3 = 20 bytes at the default 23-byte
-    // MTU). Write-without-response is hard-capped at that size and would throw
-    // "data longer than allowed"; long writes are not, regardless of MTU. This
-    // mirrors the existing control-path writes in bluetooth_notifier.
+    // Packets are pre-chunked to fit MTU-3, so we never need allowLongWrite (the
+    // bootloader characteristic does not accept queued writes — that caused
+    // ERR_LENGTH on the first >20-byte row write). [withoutResponseWrite] skips
+    // the ATT write-ack for throughput on Send Data; we still await the
+    // bootloader's status notification below.
     final completer = Completer<DfuResponse>();
     _pending = completer;
-    await characteristic.write(
-      packet,
-      withoutResponse: false,
-      allowLongWrite: packet.length > 20,
-    );
+    await characteristic.write(packet, withoutResponse: withoutResponseWrite);
     return completer.future.timeout(responseTimeout);
   }
+
+  /// "<description> (0xNN)" — always includes the raw status code so unexpected
+  /// rejections can be diagnosed from the UI message alone.
+  String _statusDetail(int status) =>
+      '${DfuStatus.describe(status)} '
+      '(0x${status.toRadixString(16).padLeft(2, '0')})';
 
   DfuResult _fail(String message) {
     log?.call(message);
