@@ -107,10 +107,19 @@ class OtaService {
       await command.setNotifyValue(true);
     }
 
+    // Pipeline the packets within each row when the MTU is large enough that a
+    // row is only a handful of packets. The transfer drains every row before the
+    // next, so in-flight never exceeds the packets-per-row — well under the burst
+    // size that corrupts the bootloader at MTU 23 (~40 packets/row). At small
+    // MTU stay serial (window 1), which is the only reliable mode there.
+    final window = mtu >= 128 ? 4 : 1;
+    log?.call('In-flight window $window');
+
     final transfer = DfuTransfer(
       characteristic: command,
       productId: productId,
       mtu: mtu,
+      inFlightWindow: window,
       log: log,
     );
 

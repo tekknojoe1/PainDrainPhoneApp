@@ -68,6 +68,14 @@ class _OtaScreenState extends ConsumerState<OtaScreen> {
             const Divider(),
             _versionRow('Available firmware',
                 ota.availableVersionString ?? '—'),
+            if (ota.currentFirmware != null) ...[
+              const Divider(),
+              _versionRow(
+                'Running slot → update slot',
+                '${ota.currentFirmware!.runningSlot} → '
+                    '${ota.currentFirmware!.inactiveSlot}',
+              ),
+            ],
           ],
         ),
       ),

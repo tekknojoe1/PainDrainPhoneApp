@@ -175,9 +175,12 @@ class DfuTransfer {
         // issuing a Sync (resets the device's receive state) and re-sending the
         // whole row, since its accumulation is discarded.
         var r = await _programRow(row);
+        // Row-address errors (invalid/protected row) are not transient — don't
+        // burn retries on them; checksum/length/etc. can recover via Sync+retry.
         var attempt = 0;
         while (r.status != DfuStatus.success &&
             r.status != DfuStatus.errRowAccess &&
+            r.status != DfuStatus.errRow &&
             attempt < maxRowRetries) {
           attempt++;
           log?.call('Row $rowIndex ${r.where} -> ${_statusDetail(r.status)}; '
@@ -187,23 +190,24 @@ class DfuTransfer {
         }
 
         if (r.status != DfuStatus.success) {
-          // The device's row-access rejection means it refused a write into its
-          // running slot: wrong slot file (or already up to date). The device is
-          // unharmed and stays on its current firmware. Anything else is a
-          // genuine failure — surface it (status code, failing sub-command, MTU)
-          // so it is not silently swallowed.
+          // The device's row-access rejection (0x0B) means it refused a write
+          // into its running slot: wrong slot file (or already up to date) — the
+          // device is unharmed. Everything else (including an invalid-row 0x0A)
+          // is surfaced with the slot, address, status and MTU so it can be
+          // diagnosed rather than silently swallowed.
           if (r.status == DfuStatus.errRowAccess) {
-            log?.call('Row $rowIndex row-access denied -> wrong slot file');
+            log?.call('Row $rowIndex (slot $appId) row-access denied '
+                '-> wrong slot file');
             return DfuResult(
               DfuResultType.wrongSlot,
-              message: 'Device refused the write at row $rowIndex '
+              message: 'Device refused the write at row $rowIndex slot $appId '
                   '(${_statusDetail(r.status)}) — wrong slot file or already up '
                   'to date.',
             );
           }
           return _fail(
-            'Row $rowIndex ${r.where} failed after $attempt retries: '
-            '${_statusDetail(r.status)} [MTU $mtu]',
+            'Row $rowIndex (slot $appId) ${r.where} failed after $attempt '
+            'retries: ${_statusDetail(r.status)} [MTU $mtu]',
           );
         }
 
@@ -282,7 +286,7 @@ class DfuTransfer {
         if (includeRowCrc) ...u32le(dfuRowCrc32(data)),
         ...data.sublist(sendEnd),
       ],
-      where: 'ProgramData ${progTail}B',
+      where: 'ProgramData ${progTail}B @0x${row.address.toRadixString(16)}',
     ));
 
     // Send with a bounded in-flight window: keep at most [inFlightWindow]
