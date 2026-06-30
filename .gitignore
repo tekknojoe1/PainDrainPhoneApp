@@ -50,4 +50,7 @@ app.*.map.json
 /android/app/release
 
 # FVM Version Cache
-.fvm/
+.fvm/dist/
+
+# Release artifacts from scripts/build_release.sh
+dist/

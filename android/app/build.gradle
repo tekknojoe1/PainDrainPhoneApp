@@ -72,6 +72,13 @@ android {
         }
     }
 
+    // Name the output APK with the app name + version, e.g.
+    // PainDrain_1.1.0_release.apk instead of app-release.apk.
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            outputFileName = "PainDrain_${flutterVersionName}_${variant.buildType.name}.apk"
+        }
+    }
 }
 
 flutter {
