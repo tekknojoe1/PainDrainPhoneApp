@@ -26,6 +26,7 @@ import '../../models/preset.dart';
 import '../../models/tens.dart';
 import '../../providers/bluetooth_notifier.dart';
 import '../../utils/app_colors.dart';
+import '../../widgets/battery_indicator.dart';
 import '../../utils/haptic_feedback.dart';
 import '../../widgets/temperature_summary.dart';
 
@@ -44,11 +45,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
   final TextEditingController _textController = TextEditingController();
   bool isAddingItem = false; // Track whether we are in "add" mode
   bool isLoading = false;
-  double batteryLevel = 100;
-  bool isCharging = false;
   bool uploadingPreset = false;
-  Icon batteryIcon = const Icon(Icons.battery_full, color: Colors.green,);
-  Color color = Colors.green;
   String currentOption = presetOptions[0];
   String uploadToDeviceString = "Uploading preset to device...";
   late AnimationController _controller;
@@ -58,19 +55,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
   double _progress = 0.0; // Track progress percentage
   Timer? _timer; // Timer for tracking hold duration
 
-  decrementBattery() async {
-    for(int i = 0; i < 100; i++){
-      print("battery Level $batteryLevel");
-      await Future.delayed(const Duration(milliseconds: 100));
-      setState(() => batteryLevel--);
-      if(batteryLevel == 0){
-        setState(() => isCharging = !isCharging);
-        await Future.delayed(const Duration(seconds: 5));
-        setState(() => isCharging = !isCharging);
-
-      }
-    }
-  }
   @override
   void initState() {
     _controller = AnimationController(
@@ -316,6 +300,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
             backgroundColor: Colors.blue.shade800,
             centerTitle: true,
             actions: [
+              const Center(child: BatteryIndicator()),
               IconButton(
                 icon: const Icon(Icons.system_update, color: Colors.white),
                 tooltip: 'Firmware update',

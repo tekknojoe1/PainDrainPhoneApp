@@ -97,6 +97,7 @@ class BluetoothNotifier extends _$BluetoothNotifier {
 
       // Setup notifications and listeners.
       await setupListeners(device);
+      await setupBatteryListener(device);
 
       // Finally, update the state
       state = state.copyWith(isConnected: true, connectedDevice: device);
@@ -329,8 +330,9 @@ class BluetoothNotifier extends _$BluetoothNotifier {
       print("Received string: $read");
       devDebugPrint(read);
       if (read == "charge") {
-        // Insert logic to handle charging (for example, update state)
-        print("Device is charging");
+        // The device only reports charging while it stays connected (e.g. during
+        // an OTA update); otherwise it won't connect while on the charger.
+        state = state.copyWith(isCharging: true);
       } else if (read == "no charge" || read == "normal") {
         state = state.copyWith(isCharging: false);
       }
@@ -351,5 +353,40 @@ class BluetoothNotifier extends _$BluetoothNotifier {
     } else {
       print("⚠️ Characteristic does not support notifications or indications.");
     }
+  }
+
+  /// Reads the current battery level and subscribes to updates from the standard
+  /// BLE Battery Service (0x180F / 0x2A19). The firmware pushes a fresh
+  /// state-of-charge roughly every 30 seconds (and on change).
+  Future<void> setupBatteryListener(BluetoothDevice device) async {
+    try {
+      final batterySubscription =
+          _batteryCharacteristic.onValueReceived.listen((value) {
+        _updateBatteryLevel(value);
+      });
+      device.cancelWhenDisconnected(batterySubscription);
+
+      // Prime with an initial read so the UI shows a value immediately.
+      final initial = await _batteryCharacteristic.read();
+      _updateBatteryLevel(initial);
+
+      if (_batteryCharacteristic.properties.notify ||
+          _batteryCharacteristic.properties.indicate) {
+        await _batteryCharacteristic.setNotifyValue(true);
+        print("✅ Battery notifications enabled.");
+      } else {
+        print("⚠️ Battery characteristic does not support notifications.");
+      }
+    } catch (e) {
+      print("⚠️ Error setting up battery listener: $e");
+    }
+  }
+
+  /// The Battery Level characteristic is a single byte, 0-100% SoC.
+  void _updateBatteryLevel(List<int> value) {
+    if (value.isEmpty) return;
+    final level = value.first.clamp(0, 100);
+    print("Battery level: $level%");
+    state = state.copyWith(batteryLevel: level);
   }
 }

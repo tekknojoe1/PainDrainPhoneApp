@@ -11,5 +11,8 @@ class DeviceState with _$DeviceState {
     @Default([]) List<ScanResult> scanResults,
     @Default(false) bool isCharging,
     @Default(false) bool showChargingAnimation,
+    // Battery state-of-charge (0-100%) from the BLE Battery Service (0x2A19).
+    // Null until the first read/notification arrives after connecting.
+    int? batteryLevel,
   }) = _DeviceState;
 }

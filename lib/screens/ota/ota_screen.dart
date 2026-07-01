@@ -5,6 +5,7 @@ import 'package:percent_indicator/linear_percent_indicator.dart';
 import '../../models/ota_state.dart';
 import '../../providers/ota_notifier.dart';
 import '../../utils/app_colors.dart';
+import '../../widgets/battery_indicator.dart';
 
 /// Firmware update screen. Shows the current vs available firmware version and
 /// surfaces the OTA states: up-to-date, update available, updating (%),
@@ -37,6 +38,7 @@ class _OtaScreenState extends ConsumerState<OtaScreen> {
         backgroundColor: Colors.blue.shade800,
         centerTitle: true,
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: const [Center(child: BatteryIndicator())],
       ),
       body: Padding(
         padding: const EdgeInsets.all(20),

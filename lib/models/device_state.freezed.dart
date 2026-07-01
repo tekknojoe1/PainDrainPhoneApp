@@ -20,7 +20,10 @@ mixin _$DeviceState {
   BluetoothDevice? get connectedDevice => throw _privateConstructorUsedError;
   List<ScanResult> get scanResults => throw _privateConstructorUsedError;
   bool get isCharging => throw _privateConstructorUsedError;
-  bool get showChargingAnimation => throw _privateConstructorUsedError;
+  bool get showChargingAnimation =>
+      throw _privateConstructorUsedError; // Battery state-of-charge (0-100%) from the BLE Battery Service (0x2A19).
+// Null until the first read/notification arrives after connecting.
+  int? get batteryLevel => throw _privateConstructorUsedError;
 
   /// Create a copy of DeviceState
   /// with the given fields replaced by the non-null parameter values.
@@ -40,7 +43,8 @@ abstract class $DeviceStateCopyWith<$Res> {
       BluetoothDevice? connectedDevice,
       List<ScanResult> scanResults,
       bool isCharging,
-      bool showChargingAnimation});
+      bool showChargingAnimation,
+      int? batteryLevel});
 }
 
 /// @nodoc
@@ -63,6 +67,7 @@ class _$DeviceStateCopyWithImpl<$Res, $Val extends DeviceState>
     Object? scanResults = null,
     Object? isCharging = null,
     Object? showChargingAnimation = null,
+    Object? batteryLevel = freezed,
   }) {
     return _then(_value.copyWith(
       isConnected: null == isConnected
@@ -85,6 +90,10 @@ class _$DeviceStateCopyWithImpl<$Res, $Val extends DeviceState>
           ? _value.showChargingAnimation
           : showChargingAnimation // ignore: cast_nullable_to_non_nullable
               as bool,
+      batteryLevel: freezed == batteryLevel
+          ? _value.batteryLevel
+          : batteryLevel // ignore: cast_nullable_to_non_nullable
+              as int?,
     ) as $Val);
   }
 }
@@ -102,7 +111,8 @@ abstract class _$$DeviceStateImplCopyWith<$Res>
       BluetoothDevice? connectedDevice,
       List<ScanResult> scanResults,
       bool isCharging,
-      bool showChargingAnimation});
+      bool showChargingAnimation,
+      int? batteryLevel});
 }
 
 /// @nodoc
@@ -123,6 +133,7 @@ class __$$DeviceStateImplCopyWithImpl<$Res>
     Object? scanResults = null,
     Object? isCharging = null,
     Object? showChargingAnimation = null,
+    Object? batteryLevel = freezed,
   }) {
     return _then(_$DeviceStateImpl(
       isConnected: null == isConnected
@@ -145,6 +156,10 @@ class __$$DeviceStateImplCopyWithImpl<$Res>
           ? _value.showChargingAnimation
           : showChargingAnimation // ignore: cast_nullable_to_non_nullable
               as bool,
+      batteryLevel: freezed == batteryLevel
+          ? _value.batteryLevel
+          : batteryLevel // ignore: cast_nullable_to_non_nullable
+              as int?,
     ));
   }
 }
@@ -157,7 +172,8 @@ class _$DeviceStateImpl implements _DeviceState {
       this.connectedDevice,
       final List<ScanResult> scanResults = const [],
       this.isCharging = false,
-      this.showChargingAnimation = false})
+      this.showChargingAnimation = false,
+      this.batteryLevel})
       : _scanResults = scanResults;
 
   @override
@@ -180,10 +196,14 @@ class _$DeviceStateImpl implements _DeviceState {
   @override
   @JsonKey()
   final bool showChargingAnimation;
+// Battery state-of-charge (0-100%) from the BLE Battery Service (0x2A19).
+// Null until the first read/notification arrives after connecting.
+  @override
+  final int? batteryLevel;
 
   @override
   String toString() {
-    return 'DeviceState(isConnected: $isConnected, connectedDevice: $connectedDevice, scanResults: $scanResults, isCharging: $isCharging, showChargingAnimation: $showChargingAnimation)';
+    return 'DeviceState(isConnected: $isConnected, connectedDevice: $connectedDevice, scanResults: $scanResults, isCharging: $isCharging, showChargingAnimation: $showChargingAnimation, batteryLevel: $batteryLevel)';
   }
 
   @override
@@ -200,7 +220,9 @@ class _$DeviceStateImpl implements _DeviceState {
             (identical(other.isCharging, isCharging) ||
                 other.isCharging == isCharging) &&
             (identical(other.showChargingAnimation, showChargingAnimation) ||
-                other.showChargingAnimation == showChargingAnimation));
+                other.showChargingAnimation == showChargingAnimation) &&
+            (identical(other.batteryLevel, batteryLevel) ||
+                other.batteryLevel == batteryLevel));
   }
 
   @override
@@ -210,7 +232,8 @@ class _$DeviceStateImpl implements _DeviceState {
       connectedDevice,
       const DeepCollectionEquality().hash(_scanResults),
       isCharging,
-      showChargingAnimation);
+      showChargingAnimation,
+      batteryLevel);
 
   /// Create a copy of DeviceState
   /// with the given fields replaced by the non-null parameter values.
@@ -227,7 +250,8 @@ abstract class _DeviceState implements DeviceState {
       final BluetoothDevice? connectedDevice,
       final List<ScanResult> scanResults,
       final bool isCharging,
-      final bool showChargingAnimation}) = _$DeviceStateImpl;
+      final bool showChargingAnimation,
+      final int? batteryLevel}) = _$DeviceStateImpl;
 
   @override
   bool get isConnected;
@@ -238,7 +262,10 @@ abstract class _DeviceState implements DeviceState {
   @override
   bool get isCharging;
   @override
-  bool get showChargingAnimation;
+  bool get showChargingAnimation; // Battery state-of-charge (0-100%) from the BLE Battery Service (0x2A19).
+// Null until the first read/notification arrives after connecting.
+  @override
+  int? get batteryLevel;
 
   /// Create a copy of DeviceState
   /// with the given fields replaced by the non-null parameter values.
