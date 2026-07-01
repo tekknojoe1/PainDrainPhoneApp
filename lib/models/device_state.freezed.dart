@@ -23,7 +23,10 @@ mixin _$DeviceState {
   bool get showChargingAnimation =>
       throw _privateConstructorUsedError; // Battery state-of-charge (0-100%) from the BLE Battery Service (0x2A19).
 // Null until the first read/notification arrives after connecting.
-  int? get batteryLevel => throw _privateConstructorUsedError;
+  int? get batteryLevel =>
+      throw _privateConstructorUsedError; // Set from a "disconnect 0/1" announcement so the imminent link drop is
+// treated as graceful, then reflects the actual reason after disconnect.
+  DeviceDisconnectReason get disconnectReason => throw _privateConstructorUsedError;
 
   /// Create a copy of DeviceState
   /// with the given fields replaced by the non-null parameter values.
@@ -44,7 +47,8 @@ abstract class $DeviceStateCopyWith<$Res> {
       List<ScanResult> scanResults,
       bool isCharging,
       bool showChargingAnimation,
-      int? batteryLevel});
+      int? batteryLevel,
+      DeviceDisconnectReason disconnectReason});
 }
 
 /// @nodoc
@@ -68,6 +72,7 @@ class _$DeviceStateCopyWithImpl<$Res, $Val extends DeviceState>
     Object? isCharging = null,
     Object? showChargingAnimation = null,
     Object? batteryLevel = freezed,
+    Object? disconnectReason = null,
   }) {
     return _then(_value.copyWith(
       isConnected: null == isConnected
@@ -94,6 +99,10 @@ class _$DeviceStateCopyWithImpl<$Res, $Val extends DeviceState>
           ? _value.batteryLevel
           : batteryLevel // ignore: cast_nullable_to_non_nullable
               as int?,
+      disconnectReason: null == disconnectReason
+          ? _value.disconnectReason
+          : disconnectReason // ignore: cast_nullable_to_non_nullable
+              as DeviceDisconnectReason,
     ) as $Val);
   }
 }
@@ -112,7 +121,8 @@ abstract class _$$DeviceStateImplCopyWith<$Res>
       List<ScanResult> scanResults,
       bool isCharging,
       bool showChargingAnimation,
-      int? batteryLevel});
+      int? batteryLevel,
+      DeviceDisconnectReason disconnectReason});
 }
 
 /// @nodoc
@@ -134,6 +144,7 @@ class __$$DeviceStateImplCopyWithImpl<$Res>
     Object? isCharging = null,
     Object? showChargingAnimation = null,
     Object? batteryLevel = freezed,
+    Object? disconnectReason = null,
   }) {
     return _then(_$DeviceStateImpl(
       isConnected: null == isConnected
@@ -160,6 +171,10 @@ class __$$DeviceStateImplCopyWithImpl<$Res>
           ? _value.batteryLevel
           : batteryLevel // ignore: cast_nullable_to_non_nullable
               as int?,
+      disconnectReason: null == disconnectReason
+          ? _value.disconnectReason
+          : disconnectReason // ignore: cast_nullable_to_non_nullable
+              as DeviceDisconnectReason,
     ));
   }
 }
@@ -173,7 +188,8 @@ class _$DeviceStateImpl implements _DeviceState {
       final List<ScanResult> scanResults = const [],
       this.isCharging = false,
       this.showChargingAnimation = false,
-      this.batteryLevel})
+      this.batteryLevel,
+      this.disconnectReason = DeviceDisconnectReason.none})
       : _scanResults = scanResults;
 
   @override
@@ -200,10 +216,15 @@ class _$DeviceStateImpl implements _DeviceState {
 // Null until the first read/notification arrives after connecting.
   @override
   final int? batteryLevel;
+// Set from a "disconnect 0/1" announcement so the imminent link drop is
+// treated as graceful, then reflects the actual reason after disconnect.
+  @override
+  @JsonKey()
+  final DeviceDisconnectReason disconnectReason;
 
   @override
   String toString() {
-    return 'DeviceState(isConnected: $isConnected, connectedDevice: $connectedDevice, scanResults: $scanResults, isCharging: $isCharging, showChargingAnimation: $showChargingAnimation, batteryLevel: $batteryLevel)';
+    return 'DeviceState(isConnected: $isConnected, connectedDevice: $connectedDevice, scanResults: $scanResults, isCharging: $isCharging, showChargingAnimation: $showChargingAnimation, batteryLevel: $batteryLevel, disconnectReason: $disconnectReason)';
   }
 
   @override
@@ -222,7 +243,9 @@ class _$DeviceStateImpl implements _DeviceState {
             (identical(other.showChargingAnimation, showChargingAnimation) ||
                 other.showChargingAnimation == showChargingAnimation) &&
             (identical(other.batteryLevel, batteryLevel) ||
-                other.batteryLevel == batteryLevel));
+                other.batteryLevel == batteryLevel) &&
+            (identical(other.disconnectReason, disconnectReason) ||
+                other.disconnectReason == disconnectReason));
   }
 
   @override
@@ -233,7 +256,8 @@ class _$DeviceStateImpl implements _DeviceState {
       const DeepCollectionEquality().hash(_scanResults),
       isCharging,
       showChargingAnimation,
-      batteryLevel);
+      batteryLevel,
+      disconnectReason);
 
   /// Create a copy of DeviceState
   /// with the given fields replaced by the non-null parameter values.
@@ -251,7 +275,8 @@ abstract class _DeviceState implements DeviceState {
       final List<ScanResult> scanResults,
       final bool isCharging,
       final bool showChargingAnimation,
-      final int? batteryLevel}) = _$DeviceStateImpl;
+      final int? batteryLevel,
+      final DeviceDisconnectReason disconnectReason}) = _$DeviceStateImpl;
 
   @override
   bool get isConnected;
@@ -265,7 +290,10 @@ abstract class _DeviceState implements DeviceState {
   bool get showChargingAnimation; // Battery state-of-charge (0-100%) from the BLE Battery Service (0x2A19).
 // Null until the first read/notification arrives after connecting.
   @override
-  int? get batteryLevel;
+  int? get batteryLevel; // Set from a "disconnect 0/1" announcement so the imminent link drop is
+// treated as graceful, then reflects the actual reason after disconnect.
+  @override
+  DeviceDisconnectReason get disconnectReason;
 
   /// Create a copy of DeviceState
   /// with the given fields replaced by the non-null parameter values.

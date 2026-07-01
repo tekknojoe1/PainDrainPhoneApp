@@ -19,9 +19,9 @@ void main() {
 
       final pkg = decodeOtaZip(zip.readAsBytesSync());
 
-      // Manifest matches the firmware build (v10101 / "1.1.1.0").
-      expect(pkg.manifest.version, 10101);
-      expect(pkg.manifest.firmwareVersion, '1.1.1.0');
+      // Manifest matches the firmware build (v10102 / "1.1.2.0").
+      expect(pkg.manifest.version, 10102);
+      expect(pkg.manifest.firmwareVersion, '1.1.2.0');
       expect(pkg.manifest.fileNameForSlot(0), 'PainDrain_slot0.cyacd2');
       expect(pkg.manifest.fileNameForSlot(1), 'PainDrain_slot1.cyacd2');
 

@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:haptic_feedback/haptic_feedback.dart';
 import 'package:location/location.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:pain_drain_mobile_app/models/device_state.dart';
 import 'package:pain_drain_mobile_app/providers/bluetooth_notifier.dart';
 import 'package:pain_drain_mobile_app/providers/temperature_notifier.dart';
 import 'package:pain_drain_mobile_app/providers/tens_notifier.dart';
@@ -19,8 +20,10 @@ import '../../widgets/check_mark_animation.dart';
 import '../../widgets/x_mark_animation.dart';
 
 class ConnectDevice extends ConsumerStatefulWidget {
-  final bool? wasDisconnected;
-  const ConnectDevice({Key? key, this.wasDisconnected}) : super(key: key);
+  /// Why the previous connection dropped, if the app arrived here from a
+  /// disconnect. Drives the message shown on entry (graceful vs. error).
+  final DeviceDisconnectReason? disconnectReason;
+  const ConnectDevice({Key? key, this.disconnectReason}) : super(key: key);
 
   @override
   ConsumerState<ConnectDevice> createState() => _ConnectDeviceState();
@@ -46,10 +49,13 @@ class _ConnectDeviceState extends ConsumerState<ConnectDevice> with SingleTicker
   @override
   void initState() {
     super.initState();
-    // Check if `wasDisconnected` is true and show the SnackBar after the first frame is built
-    if (widget.wasDisconnected == true) {
+    // Announce why the previous connection dropped (if any) once the first
+    // frame is built. A graceful power-off/charging disconnect is shown as an
+    // informational message; an unexpected drop is shown as a warning.
+    final reason = widget.disconnectReason;
+    if (reason != null && reason != DeviceDisconnectReason.none) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _showSnackBar(context);
+        _showDisconnectMessage(context, reason);
       });
     }
 
@@ -73,17 +79,39 @@ class _ConnectDeviceState extends ConsumerState<ConnectDevice> with SingleTicker
     super.dispose();
   }
 
-  void _showSnackBar(BuildContext context) {
-    const snackBar = SnackBar(
+  void _showDisconnectMessage(BuildContext context, DeviceDisconnectReason reason) {
+    late final String message;
+    late final IconData icon;
+    late final Color iconColor;
+    switch (reason) {
+      case DeviceDisconnectReason.poweringOff:
+        message = 'Device powered off';
+        icon = Icons.power_settings_new;
+        iconColor = Colors.white;
+        break;
+      case DeviceDisconnectReason.charging:
+        message = 'Device is charging — reconnect when unplugged';
+        icon = Icons.battery_charging_full;
+        iconColor = Colors.lightGreenAccent;
+        break;
+      case DeviceDisconnectReason.unexpected:
+      case DeviceDisconnectReason.none:
+        message = 'Device was disconnected!';
+        icon = Icons.warning_amber;
+        iconColor = Colors.yellow;
+        break;
+    }
+
+    final snackBar = SnackBar(
       backgroundColor: Colors.black45,
       content: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text('Device was disconnected!', style: TextStyle(fontSize: 18),),
-            Icon(Icons.warning_amber, color: Colors.yellow,)
-          ]
+        children: [
+          Text(message, style: const TextStyle(fontSize: 18)),
+          Icon(icon, color: iconColor),
+        ],
       ),
-      duration: Duration(seconds: 4), // Optional: duration for how long it shows
+      duration: const Duration(seconds: 4),
     );
 
     ScaffoldMessenger.of(context).showSnackBar(snackBar);

@@ -81,12 +81,24 @@ class BluetoothNotifier extends _$BluetoothNotifier {
       final connectionSubscription =
       device.connectionState.listen((BluetoothConnectionState connState) async {
         if (connState == BluetoothConnectionState.disconnected) {
-          // Here you might navigate to a disconnection screen or update UI.
-          // For example, update the state:
-          routes.go('/');
-          state = state.copyWith(isConnected: false, connectedDevice: null);
-          print("Device disconnected");
-          // (In your old code, you used Get.to(); adjust as needed.)
+          // A disconnect is graceful only if the firmware announced it via a
+          // "disconnect 0/1" message just beforehand (recorded in
+          // state.disconnectReason). Otherwise it's an unexpected drop.
+          final announced = state.disconnectReason;
+          final reason = (announced == DeviceDisconnectReason.poweringOff ||
+                  announced == DeviceDisconnectReason.charging)
+              ? announced
+              : DeviceDisconnectReason.unexpected;
+          state = state.copyWith(
+            isConnected: false,
+            connectedDevice: null,
+            isCharging: false,
+            disconnectReason: reason,
+          );
+          print("Device disconnected (${reason.name})");
+          // Pass the reason to the connect screen so it can show a graceful
+          // "powering off"/"charging" message instead of an error.
+          routes.go('/', extra: reason);
         } else if (connState == BluetoothConnectionState.connected) {
           success = true;
         }
@@ -99,8 +111,14 @@ class BluetoothNotifier extends _$BluetoothNotifier {
       await setupListeners(device);
       await setupBatteryListener(device);
 
-      // Finally, update the state
-      state = state.copyWith(isConnected: true, connectedDevice: device);
+      // Finally, update the state. Clear any prior disconnect reason and stale
+      // charging flag; live values arrive via notifications.
+      state = state.copyWith(
+        isConnected: true,
+        connectedDevice: device,
+        isCharging: false,
+        disconnectReason: DeviceDisconnectReason.none,
+      );
       success = true;
     } catch (e) {
       success = false;
@@ -324,19 +342,8 @@ class BluetoothNotifier extends _$BluetoothNotifier {
 
   /// Sets up notifications and listeners on the custom characteristic.
   Future<void> setupListeners(BluetoothDevice device) async {
-    final customCharacteristicSubscription = _customCharacteristic.onValueReceived.listen((value) {
-      print("Characteristic received: $value");
-      String read = hexToString(value);
-      print("Received string: $read");
-      devDebugPrint(read);
-      if (read == "charge") {
-        // The device only reports charging while it stays connected (e.g. during
-        // an OTA update); otherwise it won't connect while on the charger.
-        state = state.copyWith(isCharging: true);
-      } else if (read == "no charge" || read == "normal") {
-        state = state.copyWith(isCharging: false);
-      }
-    });
+    final customCharacteristicSubscription =
+        _customCharacteristic.onValueReceived.listen(_handleCustomCharacteristicValue);
 
     // Cancel the subscription when the device disconnects.
     device.cancelWhenDisconnected(customCharacteristicSubscription);
@@ -352,6 +359,56 @@ class BluetoothNotifier extends _$BluetoothNotifier {
       }
     } else {
       print("⚠️ Characteristic does not support notifications or indications.");
+    }
+  }
+
+  /// Handles a value from the custom characteristic, which is multiplexed:
+  ///   - a binary battery packet whose first byte is 0x62 (existing behavior), or
+  ///   - an ASCII command string ("charging 0/1", "disconnect 0/1", debug output).
+  /// Always branch on the first byte before attempting to decode text.
+  void _handleCustomCharacteristicValue(List<int> value) {
+    if (value.isEmpty) return;
+
+    // Binary battery packet. The battery percentage shown in the UI comes
+    // authoritatively from the standard Battery Service (0x2A19), so there is
+    // nothing to decode here for now — just don't misparse it as ASCII.
+    if (value.first == 0x62) {
+      print("Battery packet received (${value.length} bytes)");
+      return;
+    }
+
+    // ASCII command. Strip any trailing null terminator before decoding.
+    final bytes = value.takeWhile((b) => b != 0).toList();
+    final text = hexToString(bytes).trim();
+    if (text.isEmpty) return;
+    print("Received string: $text");
+
+    // Match the leading token and parse the integer argument; be tolerant of
+    // extra whitespace.
+    final parts = text.split(RegExp(r'\s+'));
+    final token = parts.first.toLowerCase();
+    final arg = parts.length > 1 ? int.tryParse(parts[1]) : null;
+
+    switch (token) {
+      case 'charging':
+        // Firmware: "charging 0" = charging ON, "charging 1" = charging OFF.
+        state = state.copyWith(isCharging: arg == 0);
+        print("Charging: ${arg == 0}");
+        break;
+      case 'disconnect':
+        // Firmware: "disconnect 0" = powering off, "disconnect 1" = entering
+        // charging mode. The link drops within ~100ms; recording the reason
+        // makes the imminent disconnect graceful (see connectDevice's listener).
+        final reason = arg == 0
+            ? DeviceDisconnectReason.poweringOff
+            : DeviceDisconnectReason.charging;
+        state = state.copyWith(disconnectReason: reason);
+        print("Graceful disconnect pending: ${reason.name}");
+        break;
+      default:
+        // Debug/telemetry strings (e.g. "T…", "t…", "v…").
+        devDebugPrint(text);
+        break;
     }
   }
 
