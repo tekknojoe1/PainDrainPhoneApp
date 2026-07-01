@@ -7,12 +7,16 @@
 # The version is read from pubspec.yaml, so it stays in sync automatically.
 #
 # Usage:
-#   scripts/build_release.sh [apk|ipa|all]   (default: all)
+#   scripts/build_release.sh [apk|debug|ipa|all]   (default: all)
+#     apk    -> release APK  -> dist/PainDrain_<version>_release.apk
+#     debug  -> debug APK    -> dist/PainDrain_<version>_debug.apk
+#     ipa    -> release IPA  -> dist/PainDrain_<version>_release.ipa
+#     all    -> release APK + IPA
 #
 # Notes:
 # - Android: `flutter build apk` also writes a versioned copy to
-#   build/app/outputs/apk/release/ via android/app/build.gradle; this script
-#   additionally collects it into dist/.
+#   build/app/outputs/apk/<mode>/ via android/app/build.gradle; this script
+#   additionally collects it into dist/ with the app name + version.
 # - iOS: produces a local distribution IPA via `flutter build ipa`. This is a
 #   local file for archiving/sharing and is separate from the TestFlight upload
 #   flow (xcodebuild -exportArchive ... destination=upload). Run on macOS with
@@ -28,11 +32,13 @@ TARGET="${1:-all}"
 
 mkdir -p dist
 
+# build_apk [release|debug]  (default: release)
 build_apk() {
-  flutter build apk --release
-  cp build/app/outputs/flutter-apk/app-release.apk \
-    "dist/${APP}_${VERSION}_release.apk"
-  echo "Wrote dist/${APP}_${VERSION}_release.apk"
+  local mode="${1:-release}"
+  flutter build apk --"${mode}"
+  cp "build/app/outputs/flutter-apk/app-${mode}.apk" \
+    "dist/${APP}_${VERSION}_${mode}.apk"
+  echo "Wrote dist/${APP}_${VERSION}_${mode}.apk"
 }
 
 build_ipa() {
@@ -49,8 +55,9 @@ build_ipa() {
 }
 
 case "${TARGET}" in
-  apk) build_apk ;;
+  apk) build_apk release ;;
+  debug) build_apk debug ;;
   ipa) build_ipa ;;
-  all) build_apk; build_ipa ;;
-  *) echo "Usage: $0 [apk|ipa|all]" >&2; exit 1 ;;
+  all) build_apk release; build_ipa ;;
+  *) echo "Usage: $0 [apk|debug|ipa|all]" >&2; exit 1 ;;
 esac
