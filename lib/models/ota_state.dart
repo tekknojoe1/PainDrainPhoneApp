@@ -32,6 +32,11 @@ enum OtaStatus {
 
   /// A retryable failure occurred; see [OtaState.message].
   failed,
+
+  /// The image is not compatible with the connected device (model / hardware
+  /// revision allow-list, or the device rejected DFU ENTER for a product-ID
+  /// mismatch). Terminal for this device — retrying the same image won't help.
+  incompatible,
 }
 
 class OtaState {

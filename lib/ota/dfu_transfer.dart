@@ -29,6 +29,11 @@ enum DfuResultType {
   /// that occur while the cancel is racing the in-flight row are reported as
   /// this, not [failed].
   cancelled,
+
+  /// The device rejected DFU ENTER — the image is for a different product
+  /// (the bootloader enforces the product ID at ENTER). Incompatible firmware;
+  /// aborting is correct and retrying the same image won't help.
+  incompatible,
 }
 
 class DfuResult {
@@ -138,7 +143,16 @@ class DfuTransfer {
         u32le(image.productId ?? productId),
       );
       if (!enter.isSuccess) {
-        return _fail('Enter DFU rejected: ${_statusDetail(enter.status)}');
+        // The bootloader enforces the product ID at ENTER, so a rejection here
+        // means the image is for a different product — incompatible, not a
+        // transient failure. Abort without retrying.
+        log?.call('Enter DFU rejected (${_statusDetail(enter.status)}) '
+            '-> incompatible firmware for this device');
+        return DfuResult(
+          DfuResultType.incompatible,
+          message: 'Incompatible firmware — the device rejected the update '
+              '(${_statusDetail(enter.status)}).',
+        );
       }
       log?.call('Entered DFU; programming ${image.rows.length} rows '
           '(appId $appId, ${image.totalDataBytes} bytes)');

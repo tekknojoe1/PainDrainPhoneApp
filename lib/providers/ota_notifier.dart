@@ -49,6 +49,29 @@ class OtaNotifier extends Notifier<OtaState> {
     try {
       final firmware = await _service.readFirmwareInfo(device);
       final package = await _source.load();
+
+      // Compatibility pre-flight: model + hardware-revision allow-lists from the
+      // manifest, matched against the device's DIS values (read at connect). The
+      // device also enforces the product ID itself at DFU ENTER. Block here with
+      // a clear message rather than failing mid-transfer.
+      final bt = ref.read(bluetoothNotifierProvider.notifier);
+      final incompatible = incompatibilityReason(
+        compatibleModels: package.manifest.compatibleModels,
+        compatibleHardwareRevisions:
+            package.manifest.compatibleHardwareRevisions,
+        deviceModel: bt.deviceModelNumber,
+        deviceHardwareRevision: bt.deviceHardwareRevision,
+      );
+      if (incompatible != null) {
+        state = state.copyWith(
+          status: OtaStatus.incompatible,
+          currentFirmware: firmware,
+          manifest: package.manifest,
+          message: incompatible,
+        );
+        return;
+      }
+
       final decision = decideUpdate(
         deviceVersion: firmware.version,
         manifestVersion: package.manifest.version,
@@ -155,6 +178,14 @@ class OtaNotifier extends Notifier<OtaState> {
             status: OtaStatus.updateAvailable,
             progress: 0,
             message: result.message ?? 'Update cancelled',
+          );
+          break;
+        case DfuResultType.incompatible:
+          // Device rejected DFU ENTER (product-ID mismatch) — terminal, not
+          // retryable with this image.
+          state = state.copyWith(
+            status: OtaStatus.incompatible,
+            message: result.message ?? 'Incompatible firmware for this device.',
           );
           break;
         case DfuResultType.failed:

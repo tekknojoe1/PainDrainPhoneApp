@@ -31,3 +31,30 @@ UpdateStatus decideUpdate({
   }
   return UpdateStatus.upToDate;
 }
+
+/// Returns a human-readable reason the image is NOT compatible with the
+/// connected device, or `null` if it is compatible.
+///
+/// [compatibleModels] and [compatibleHardwareRevisions] are exact-match
+/// allow-lists from the manifest; an empty list means "accept any". A null /
+/// unknown device value fails a non-empty allow-list (fail safe — we won't flash
+/// if we can't confirm the device matches).
+String? incompatibilityReason({
+  required List<String> compatibleModels,
+  required List<String> compatibleHardwareRevisions,
+  required String? deviceModel,
+  required String? deviceHardwareRevision,
+}) {
+  if (compatibleModels.isNotEmpty &&
+      (deviceModel == null || !compatibleModels.contains(deviceModel))) {
+    return 'This update is not for your device model'
+        '${deviceModel != null ? ' ($deviceModel)' : ''}.';
+  }
+  if (compatibleHardwareRevisions.isNotEmpty &&
+      (deviceHardwareRevision == null ||
+          !compatibleHardwareRevisions.contains(deviceHardwareRevision))) {
+    return 'This update is not compatible with your hardware revision'
+        '${deviceHardwareRevision != null ? ' ($deviceHardwareRevision)' : ''}.';
+  }
+  return null;
+}

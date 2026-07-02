@@ -19,16 +19,21 @@ void main() {
 
       final pkg = decodeOtaZip(zip.readAsBytesSync());
 
-      // Manifest matches the firmware build (v10102 / "1.1.2.6").
+      // Manifest matches the firmware build (v10102 / "1.1.2.8").
       expect(pkg.manifest.version, 10102);
-      expect(pkg.manifest.firmwareVersion, '1.1.2.6');
+      expect(pkg.manifest.firmwareVersion, '1.1.2.8');
+
+      // Compatibility metadata (product id + allow-lists).
+      expect(pkg.manifest.productId, '0x50440001');
+      expect(pkg.manifest.compatibleModels, ['BDC-PD-SD-001']);
+      expect(pkg.manifest.compatibleHardwareRevisions, ['PD-SD-001']);
       expect(pkg.manifest.fileNameForSlot(0), 'PainDrain_slot0.cyacd2');
       expect(pkg.manifest.fileNameForSlot(1), 'PainDrain_slot1.cyacd2');
 
-      // Slot 0 image: linked at 0x10010000, appId 0, product 0x01020304.
+      // Slot 0 image: linked at 0x10010000, appId 0, product 0x50440001.
       final slot0 = pkg.imageForSlot(0);
       expect(slot0.appId, 0);
-      expect(slot0.productId, 0x01020304);
+      expect(slot0.productId, 0x50440001);
       expect(slot0.checksumType, 0x00);
       expect(slot0.appInfoAddress, 0x10010000);
       expect(slot0.rows, isNotEmpty);

@@ -188,6 +188,11 @@ class _OtaScreenState extends ConsumerState<OtaScreen> {
           const Icon(Icons.error_outline, color: Colors.red, size: 64),
           ota.message ?? 'Update failed',
         );
+      case OtaStatus.incompatible:
+        return _centered(
+          const Icon(Icons.block, color: AppColors.amber, size: 64),
+          ota.message ?? 'This update is not compatible with your device.',
+        );
       case OtaStatus.idle:
         return _centered(
           const Icon(Icons.system_update_alt, color: Colors.black38, size: 64),
@@ -222,6 +227,7 @@ class _OtaScreenState extends ConsumerState<OtaScreen> {
       case OtaStatus.success:
       case OtaStatus.upToDate:
       case OtaStatus.wrongSlot:
+      case OtaStatus.incompatible:
         return _primaryButton(
             'Check again', Colors.blue.shade800, notifier.checkForUpdate);
       case OtaStatus.checking:

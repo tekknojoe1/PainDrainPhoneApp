@@ -13,6 +13,9 @@ class OtaManifest {
     required this.firmwareVersion,
     required this.version,
     required this.slotFiles,
+    this.productId,
+    this.compatibleModels = const [],
+    this.compatibleHardwareRevisions = const [],
   });
 
   /// Human readable version, e.g. `"1.1.0.6"`.
@@ -23,6 +26,18 @@ class OtaManifest {
 
   /// Maps slot index (`0`/`1`) to the `.cyacd2` file name within the zip.
   final Map<int, String> slotFiles;
+
+  /// DFU product ID string from the manifest, e.g. `"0x50440001"`. Informational
+  /// on the app side — the device enforces the product ID itself at DFU ENTER
+  /// (the app never sends it manually; it is carried in the `.cyacd2`).
+  final String? productId;
+
+  /// Device Model Numbers this image supports (exact match). Empty = accept any.
+  final List<String> compatibleModels;
+
+  /// Hardware Revision Strings this image supports (exact match). Empty = accept
+  /// any.
+  final List<String> compatibleHardwareRevisions;
 
   /// Returns the `.cyacd2` file name to flash for the given (inactive) slot.
   ///
@@ -63,12 +78,23 @@ class OtaManifest {
       throw const FormatException('manifest.slots contained no valid entries');
     }
 
+    final productIdRaw = json['product_id'];
+
     return OtaManifest(
       firmwareVersion: firmwareVersion,
       version: version,
       slotFiles: slotFiles,
+      productId: productIdRaw is String ? productIdRaw : null,
+      compatibleModels: _stringList(json['compatible_models']),
+      compatibleHardwareRevisions:
+          _stringList(json['compatible_hardware_revisions']),
     );
   }
+
+  /// Parses a JSON string array, ignoring non-string entries; a missing or
+  /// non-list value becomes an empty list ("accept any").
+  static List<String> _stringList(dynamic value) =>
+      value is List ? value.whereType<String>().toList() : const [];
 
   @override
   String toString() => 'OtaManifest($firmwareVersion, version=$version)';

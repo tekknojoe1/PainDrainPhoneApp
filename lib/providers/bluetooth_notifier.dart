@@ -23,11 +23,14 @@ class BluetoothNotifier extends _$BluetoothNotifier {
   final String _characteristicConfigurationUUID = "2902";
   final String _disServiceUUID = "180a";
   final String _modelNumberUUID = "2a24";
+  final String _hardwareRevisionUUID = "2a27";
   final String _firmwareRevisionUUID = "2a26";
 
   /// Device Information Service values read once at connect time (for the app
-  /// info modal). Null until a device is connected / if it doesn't expose them.
+  /// info modal and OTA compatibility checks). Null until a device is connected
+  /// / if it doesn't expose them.
   String? deviceModelNumber;
+  String? deviceHardwareRevision;
   String? deviceFirmwareVersion;
 
   late BluetoothDescriptor _customConfigurationDescriptor;
@@ -200,6 +203,7 @@ class BluetoothNotifier extends _$BluetoothNotifier {
   /// so only the version part is kept.
   Future<void> _readDeviceInfo() async {
     deviceModelNumber = null;
+    deviceHardwareRevision = null;
     deviceFirmwareVersion = null;
     try {
       BluetoothService? dis;
@@ -220,6 +224,10 @@ class BluetoothNotifier extends _$BluetoothNotifier {
         if (uuid == _modelNumberUUID) {
           deviceModelNumber = _decodeDeviceString(await characteristic.read());
           print("Device model number: $deviceModelNumber");
+        } else if (uuid == _hardwareRevisionUUID) {
+          deviceHardwareRevision =
+              _decodeDeviceString(await characteristic.read());
+          print("Device hardware revision: $deviceHardwareRevision");
         } else if (uuid == _firmwareRevisionUUID) {
           deviceFirmwareVersion =
               _decodeDeviceString(await characteristic.read()).split('/').first;

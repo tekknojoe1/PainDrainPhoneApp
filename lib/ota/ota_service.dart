@@ -26,8 +26,9 @@ class OtaService {
   static const String _btsCharacteristicUuid =
       '00060001-f8ce-11e4-abf4-0002a5d5c51b';
 
-  /// PainDrain DFU product ID.
-  static const int productId = 0x01020304;
+  /// PainDrain DFU product ID. Fallback only — the real value is read from the
+  /// `.cyacd2` header (`image.productId`); the device enforces it at DFU ENTER.
+  static const int productId = 0x50440001;
 
   final void Function(String message)? log;
 
