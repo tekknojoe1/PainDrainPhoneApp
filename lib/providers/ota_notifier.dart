@@ -147,6 +147,16 @@ class OtaNotifier extends Notifier<OtaState> {
             message: result.message ?? 'Wrong slot file or already up to date.',
           );
           break;
+        case DfuResultType.cancelled:
+          // User cancelled: the device aborted the DFU in place and stayed
+          // connected, so return to the "update available" state — the user can
+          // retry on the same link with no reconnect. Not an error.
+          state = state.copyWith(
+            status: OtaStatus.updateAvailable,
+            progress: 0,
+            message: result.message ?? 'Update cancelled',
+          );
+          break;
         case DfuResultType.failed:
           state = state.copyWith(
             status: OtaStatus.failed,

@@ -22,6 +22,13 @@ enum DfuResultType {
 
   /// A genuine transfer failure (framing, verify, timeout, BLE error).
   failed,
+
+  /// The caller aborted the transfer (user cancel). The device was told to
+  /// abort the DFU session in place and stays connected — this is not an error,
+  /// and the update can be retried on the same link. Any BLE/command errors
+  /// that occur while the cancel is racing the in-flight row are reported as
+  /// this, not [failed].
+  cancelled,
 }
 
 class DfuResult {
@@ -166,7 +173,7 @@ class DfuTransfer {
       var sentBytes = 0;
       for (var rowIndex = 0; rowIndex < image.rows.length; rowIndex++) {
         if (cancelToken?.isCancelled ?? false) {
-          return _fail('Cancelled by user');
+          return _cancelled();
         }
         final row = image.rows[rowIndex];
 
@@ -182,11 +189,21 @@ class DfuTransfer {
             r.status != DfuStatus.errRowAccess &&
             r.status != DfuStatus.errRow &&
             attempt < maxRowRetries) {
+          // A cancel racing an in-flight row makes its remaining writes fail
+          // (the device has already left DFU) — don't burn retries on that,
+          // surface it as a cancel below.
+          if (cancelToken?.isCancelled ?? false) break;
           attempt++;
           log?.call('Row $rowIndex ${r.where} -> ${_statusDetail(r.status)}; '
               'resync + retry $attempt/$maxRowRetries');
           await _resync();
           r = await _programRow(row);
+        }
+
+        // If the user cancelled, any row error here is the fallout of the device
+        // aborting DFU in place — report the cancel, not a transfer failure.
+        if (cancelToken?.isCancelled ?? false) {
+          return _cancelled();
         }
 
         if (r.status != DfuStatus.success) {
@@ -402,6 +419,11 @@ class DfuTransfer {
   DfuResult _fail(String message) {
     log?.call(message);
     return DfuResult(DfuResultType.failed, message: message);
+  }
+
+  DfuResult _cancelled() {
+    log?.call('Cancelled by user — DFU aborted in place');
+    return const DfuResult(DfuResultType.cancelled, message: 'Update cancelled');
   }
 
   /// Recovers the bootloader's receive state after a row failure: abandons any
