@@ -21,6 +21,14 @@ class BluetoothNotifier extends _$BluetoothNotifier {
   final String _batteryServiceUUID = "180f";
   final String _batteryCharacteristicUUID = "2a19";
   final String _characteristicConfigurationUUID = "2902";
+  final String _disServiceUUID = "180a";
+  final String _modelNumberUUID = "2a24";
+  final String _firmwareRevisionUUID = "2a26";
+
+  /// Device Information Service values read once at connect time (for the app
+  /// info modal). Null until a device is connected / if it doesn't expose them.
+  String? deviceModelNumber;
+  String? deviceFirmwareVersion;
 
   late BluetoothDescriptor _customConfigurationDescriptor;
 
@@ -112,6 +120,7 @@ class BluetoothNotifier extends _$BluetoothNotifier {
 
       device.cancelWhenDisconnected(connectionSubscription, delayed: true, next: true);
       await discoverServices(device);
+      await _readDeviceInfo();
 
       // Setup notifications and listeners.
       await setupListeners(device);
@@ -183,6 +192,49 @@ class BluetoothNotifier extends _$BluetoothNotifier {
       }
     }
   }
+
+  /// Reads the Device Information Service (0x180A) model number (0x2A24) and
+  /// firmware revision (0x2A26) once at connect time, for the app info modal.
+  /// Best-effort: leaves a value null if the device doesn't expose that
+  /// characteristic. The firmware revision is published as "<version>/<slot>",
+  /// so only the version part is kept.
+  Future<void> _readDeviceInfo() async {
+    deviceModelNumber = null;
+    deviceFirmwareVersion = null;
+    try {
+      BluetoothService? dis;
+      for (final service in _services) {
+        if (service.uuid.toString() == _disServiceUUID) {
+          dis = service;
+          break;
+        }
+      }
+      if (dis == null) {
+        print("⚠️ Device Information Service (0x180A) not found");
+        return;
+      }
+      print("DIS characteristics: "
+          "${dis.characteristics.map((c) => c.uuid.toString()).toList()}");
+      for (final characteristic in dis.characteristics) {
+        final uuid = characteristic.uuid.toString();
+        if (uuid == _modelNumberUUID) {
+          deviceModelNumber = _decodeDeviceString(await characteristic.read());
+          print("Device model number: $deviceModelNumber");
+        } else if (uuid == _firmwareRevisionUUID) {
+          deviceFirmwareVersion =
+              _decodeDeviceString(await characteristic.read()).split('/').first;
+          print("Device firmware version: $deviceFirmwareVersion");
+        }
+      }
+    } catch (e) {
+      print("⚠️ Error reading device info: $e");
+    }
+  }
+
+  /// Decodes a DIS string characteristic value (ASCII), dropping NUL padding
+  /// and surrounding whitespace.
+  String _decodeDeviceString(List<int> raw) =>
+      String.fromCharCodes(raw.where((b) => b != 0)).trim();
 
   /// Writes data to the device based on the provided stimulus.
   Future<void> writeToDevice(String stimulus, List<int> hexValues) async {
