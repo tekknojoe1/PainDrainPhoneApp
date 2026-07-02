@@ -263,6 +263,22 @@ class BluetoothNotifier extends _$BluetoothNotifier {
     }
   }
 
+  /// Tells the device to abort an in-progress OTA in place. Written as the ASCII
+  /// string "cancel" on the custom characteristic (same path as the T/t/v
+  /// commands, a normal write-with-response). On receiving it the firmware
+  /// resets its DFU session and re-enables all functions WITHOUT dropping the
+  /// BLE link, so the update can be retried on the same connection without
+  /// reconnecting. Caller must halt the DFU (bootloader) writes first so a
+  /// queued packet can't race the firmware's reset.
+  Future<void> sendOtaCancel() async {
+    try {
+      await newWriteToDevice("cancel");
+      print("Sent OTA cancel to device");
+    } catch (e) {
+      print("⚠️ Error sending OTA cancel: $e");
+    }
+  }
+
   Future<void> uploadPresetToDevice(Preset preset) async {
     print("Uploading");
     int currentChannel = preset.tens.currentChannel;

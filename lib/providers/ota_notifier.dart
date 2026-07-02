@@ -165,7 +165,17 @@ class OtaNotifier extends Notifier<OtaState> {
   }
 
   /// Cancels an in-progress transfer.
-  void cancel() => _cancelToken?.cancel();
+  ///
+  /// Order matters: halt the bootloader (DFU) writes first via the cancel
+  /// token, THEN tell the device to abort in place by writing "cancel" on the
+  /// custom characteristic. The firmware resets its DFU session and re-enables
+  /// all functions while keeping the BLE link up, so the update can be retried
+  /// on the same connection. Stopping the token before sending "cancel" avoids
+  /// a queued ProgramData write landing after the firmware's reset.
+  Future<void> cancel() async {
+    _cancelToken?.cancel();
+    await ref.read(bluetoothNotifierProvider.notifier).sendOtaCancel();
+  }
 
   /// After the device resets into the new slot, reconnect and re-read the DIS
   /// to confirm success and refresh the displayed version/slot.
