@@ -111,6 +111,11 @@ class OtaNotifier extends Notifier<OtaState> {
     );
 
     try {
+      // Redundancy: make sure no stimulus is active before flashing begins.
+      // The firmware also disables all functionality during an update; this is
+      // a belt-and-suspenders in case that path is ever missed.
+      await ref.read(bluetoothNotifierProvider.notifier).shutOffAllStimuli();
+
       final package = await _source.load();
       final image = package.imageForSlot(firmware.inactiveSlot);
 

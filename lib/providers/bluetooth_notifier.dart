@@ -239,6 +239,30 @@ class BluetoothNotifier extends _$BluetoothNotifier {
     }
   }
 
+  /// Sends explicit "off" commands for every stimulus (TENS on both channels,
+  /// temperature, vibration) so nothing is active on the device. Used as a
+  /// redundancy right before an OTA update begins — the firmware also disables
+  /// all functionality during an update, and this is a belt-and-suspenders in
+  /// case that path is ever missed. Deliberately does NOT touch the stimulus
+  /// notifier state, so the user's saved settings are preserved.
+  Future<void> shutOffAllStimuli() async {
+    if (!state.isConnected) return;
+    try {
+      // TENS: intensity 0 and not playing, for each channel. The command
+      // format matches getCommand("tens"):
+      //   "T <intensity> <mode> <play> <channel> <phase>".
+      for (final channel in const [1, 2]) {
+        await newWriteToDevice("T 0 1 0 $channel 0");
+      }
+      // Temperature neutral (0) and vibration off (0 Hz).
+      await newWriteToDevice("t 0");
+      await newWriteToDevice("v 0");
+      print("Shut off all stimuli");
+    } catch (e) {
+      print("⚠️ Error shutting off stimuli: $e");
+    }
+  }
+
   Future<void> uploadPresetToDevice(Preset preset) async {
     print("Uploading");
     int currentChannel = preset.tens.currentChannel;
