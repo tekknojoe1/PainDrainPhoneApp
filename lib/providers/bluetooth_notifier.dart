@@ -81,6 +81,12 @@ class BluetoothNotifier extends _$BluetoothNotifier {
       final connectionSubscription =
       device.connectionState.listen((BluetoothConnectionState connState) async {
         if (connState == BluetoothConnectionState.disconnected) {
+          // If a "disconnect 0/1" announcement already handled this (state is
+          // no longer connected), don't navigate again.
+          if (!state.isConnected) {
+            print("Disconnect already handled gracefully");
+            return;
+          }
           // A disconnect is graceful only if the firmware announced it via a
           // "disconnect 0/1" message just beforehand (recorded in
           // state.disconnectReason). Otherwise it's an unexpected drop.
@@ -392,18 +398,20 @@ class BluetoothNotifier extends _$BluetoothNotifier {
     switch (token) {
       case 'charging':
         // Firmware: "charging 0" = charging ON, "charging 1" = charging OFF.
-        state = state.copyWith(isCharging: arg == 0);
-        print("Charging: ${arg == 0}");
+        final charging = arg == 0;
+        state = state.copyWith(isCharging: charging);
+        print("Charging: $charging");
         break;
       case 'disconnect':
         // Firmware: "disconnect 0" = powering off, "disconnect 1" = entering
-        // charging mode. The link drops within ~100ms; recording the reason
-        // makes the imminent disconnect graceful (see connectDevice's listener).
+        // charging mode. The device will drop the link on its own, but the
+        // phone can take several seconds to notice (BLE supervision timeout),
+        // so act on the announcement immediately instead of waiting.
         final reason = arg == 0
             ? DeviceDisconnectReason.poweringOff
             : DeviceDisconnectReason.charging;
-        state = state.copyWith(disconnectReason: reason);
-        print("Graceful disconnect pending: ${reason.name}");
+        print("Graceful disconnect: ${reason.name}");
+        _handleGracefulDisconnect(reason);
         break;
       default:
         // Debug/telemetry strings (e.g. "T…", "t…", "v…").
@@ -411,6 +419,38 @@ class BluetoothNotifier extends _$BluetoothNotifier {
         break;
     }
   }
+
+  /// Responds to a firmware "disconnect 0/1" announcement: record the reason,
+  /// return to the connect screen right away, and proactively drop the link so
+  /// we don't wait on the phone's BLE supervision timeout. The connection-state
+  /// listener will also fire when the link actually closes, but by then the UI
+  /// has already moved on (and the reason is still set, so it stays graceful).
+  Future<void> _handleGracefulDisconnect(DeviceDisconnectReason reason) async {
+    print("Graceful disconnect handling: ${reason.name}");
+    // Mark disconnected up front so the connection-state listener (which fires
+    // when the link actually closes) sees it's already been handled and skips
+    // navigating a second time.
+    state = state.copyWith(
+      isConnected: false,
+      connectedDevice: null,
+      isCharging: false,
+      disconnectReason: reason,
+    );
+    routes.go('/', extra: reason);
+    try {
+      await _myConnectedDevice?.disconnect();
+    } catch (e) {
+      print("Error during graceful disconnect: $e");
+    }
+  }
+
+  /// Intentionally drops the link and returns to the connect screen with the
+  /// given [reason] (shown as a graceful message, not an error). Used when the
+  /// user leaves the OTA screen after a failed/cancelled update while charging —
+  /// the device would otherwise stay abnormally connected instead of returning
+  /// to normal charging behavior.
+  Future<void> disconnectWithReason(DeviceDisconnectReason reason) =>
+      _handleGracefulDisconnect(reason);
 
   /// Reads the current battery level and subscribes to updates from the standard
   /// BLE Battery Service (0x180F / 0x2A19). The firmware pushes a fresh

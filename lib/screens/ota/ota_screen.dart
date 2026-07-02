@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:percent_indicator/linear_percent_indicator.dart';
 
+import '../../models/device_state.dart';
 import '../../models/ota_state.dart';
+import '../../providers/bluetooth_notifier.dart';
 import '../../providers/ota_notifier.dart';
 import '../../utils/app_colors.dart';
 import '../../widgets/battery_indicator.dart';
@@ -18,6 +20,13 @@ class OtaScreen extends ConsumerStatefulWidget {
 }
 
 class _OtaScreenState extends ConsumerState<OtaScreen> {
+  /// Latched true if the unit reported charging at any point while this screen
+  /// was open. Charging is only surfaced on the live link during an OTA (the
+  /// firmware's non-OTA charge path disconnects instead of notifying), so this
+  /// reliably marks "the unit charged during this update session" — independent
+  /// of whether it's still plugged in at the moment the user leaves.
+  bool _chargedDuringUpdate = false;
+
   @override
   void initState() {
     super.initState();
@@ -30,7 +39,32 @@ class _OtaScreenState extends ConsumerState<OtaScreen> {
   @override
   Widget build(BuildContext context) {
     final ota = ref.watch(otaNotifierProvider);
-    return Scaffold(
+    // Latch charging as soon as it's reported so the exit-disconnect decision
+    // doesn't depend on the unit still being plugged in at the instant of exit.
+    ref.listen<bool>(
+      bluetoothNotifierProvider.select((s) => s.isCharging),
+      (_, isCharging) {
+        if (isCharging) _chargedDuringUpdate = true;
+      },
+    );
+    // If the unit charged during a non-successful update, leaving the screen
+    // must drop the link (it's only still connected because charging held it
+    // through the OTA). `dispose` is not a reliable hook here — go_router does
+    // not always tear this route down on back — so intercept the pop directly:
+    // block it and disconnect (which navigates to the connect screen) instead.
+    final shouldDisconnectOnExit =
+        _chargedDuringUpdate && ota.status != OtaStatus.success;
+    return PopScope(
+      canPop: !shouldDisconnectOnExit,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        print('[OTA] back intercepted -> disconnecting '
+            '(charged=$_chargedDuringUpdate status=${ota.status})');
+        ref
+            .read(bluetoothNotifierProvider.notifier)
+            .disconnectWithReason(DeviceDisconnectReason.charging);
+      },
+      child: Scaffold(
       backgroundColor: AppColors.offWhite,
       appBar: AppBar(
         title: const Text('Firmware Update',
@@ -53,6 +87,7 @@ class _OtaScreenState extends ConsumerState<OtaScreen> {
             const SizedBox(height: 12),
           ],
         ),
+      ),
       ),
     );
   }

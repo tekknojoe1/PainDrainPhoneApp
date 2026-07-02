@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -42,6 +43,7 @@ class _ConnectDeviceState extends ConsumerState<ConnectDevice> with SingleTicker
   bool showXMark =  false;
   bool isPulsing = false;
   String _appVersion = '';
+  String _buildNumber = '';
 
 
 
@@ -63,7 +65,10 @@ class _ConnectDeviceState extends ConsumerState<ConnectDevice> with SingleTicker
       _adapterState = state;
     });
     PackageInfo.fromPlatform().then((info) {
-      setState(() => _appVersion = info.version);
+      setState(() {
+        _appVersion = info.version;
+        _buildNumber = info.buildNumber;
+      });
     });
     _animationController = AnimationController(vsync: this, duration: const Duration(seconds: 1));
     _animation = Tween<double>(begin: 0, end: 1).animate(
@@ -274,7 +279,9 @@ class _ConnectDeviceState extends ConsumerState<ConnectDevice> with SingleTicker
                   context: context,
                   builder: (context) => AlertDialog(
                     title: const Text('App Version'),
-                    content: Text('Version $_appVersion'),
+                    content: Text(kDebugMode
+                        ? 'Version $_appVersion (build $_buildNumber)'
+                        : 'Version $_appVersion'),
                     actions: [
                       TextButton(
                         onPressed: () => Navigator.pop(context),
