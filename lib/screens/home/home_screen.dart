@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:animated_icon/animate_icon.dart';
 import 'package:animated_icon/animate_icons.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -24,8 +25,11 @@ import 'package:pain_drain_mobile_app/widgets/vibration_summary.dart';
 import 'package:percent_indicator/circular_percent_indicator.dart';
 import '../../models/preset.dart';
 import '../../models/tens.dart';
+import '../../models/ota_state.dart';
 import '../../providers/bluetooth_notifier.dart';
+import '../../providers/ota_notifier.dart';
 import '../../utils/app_colors.dart';
+import '../../widgets/battery_indicator.dart';
 import '../../utils/haptic_feedback.dart';
 import '../../widgets/temperature_summary.dart';
 
@@ -44,33 +48,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
   final TextEditingController _textController = TextEditingController();
   bool isAddingItem = false; // Track whether we are in "add" mode
   bool isLoading = false;
-  double batteryLevel = 100;
-  bool isCharging = false;
   bool uploadingPreset = false;
-  Icon batteryIcon = const Icon(Icons.battery_full, color: Colors.green,);
-  Color color = Colors.green;
   String currentOption = presetOptions[0];
   String uploadToDeviceString = "Uploading preset to device...";
   late AnimationController _controller;
   String _appVersion = '';
+  String _buildNumber = '';
   int? _selectedIndex; // Track which button is selected
   int? _loadingIndex; // Track which button is showing a progress indicator
   double _progress = 0.0; // Track progress percentage
   Timer? _timer; // Timer for tracking hold duration
 
-  decrementBattery() async {
-    for(int i = 0; i < 100; i++){
-      print("battery Level $batteryLevel");
-      await Future.delayed(const Duration(milliseconds: 100));
-      setState(() => batteryLevel--);
-      if(batteryLevel == 0){
-        setState(() => isCharging = !isCharging);
-        await Future.delayed(const Duration(seconds: 5));
-        setState(() => isCharging = !isCharging);
-
-      }
-    }
-  }
   @override
   void initState() {
     _controller = AnimationController(
@@ -78,9 +66,60 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
       duration: const Duration(seconds: 2),
     );
     PackageInfo.fromPlatform().then((info) {
-      setState(() => _appVersion = info.version);
+      setState(() {
+        _appVersion = info.version;
+        _buildNumber = info.buildNumber;
+      });
+    });
+    // Check for a firmware update once, when the home screen mounts after
+    // connecting. Drives the update icon (release-only visibility) and the
+    // "update available" notification.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final connected = ref.read(bluetoothNotifierProvider).isConnected;
+      final ota = ref.read(otaNotifierProvider);
+      if (connected && !ota.isBusy) {
+        ref.read(otaNotifierProvider.notifier).checkForUpdate();
+      }
     });
     super.initState();
+  }
+
+  /// Shows the app/device info dialog: app version always, the build number
+  /// only in debug builds, and — when a device is connected — its model number
+  /// and firmware version (read from the DIS at connect time).
+  void _showAppInfo() {
+    final connected = ref.read(bluetoothNotifierProvider).isConnected;
+    final bt = ref.read(bluetoothNotifierProvider.notifier);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('App Version'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(kDebugMode
+                ? 'Version $_appVersion (build $_buildNumber)'
+                : 'Version $_appVersion'),
+            if (connected) ...[
+              const SizedBox(height: 12),
+              const Text('Device',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              Text('Model: ${bt.deviceModelNumber ?? '—'}'),
+              Text('Firmware: ${bt.deviceFirmwareVersion ?? '—'}'),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -290,6 +329,30 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
   Widget build(BuildContext context) {
     final presetNotifier = ref.watch(presetListNotifierProvider);
     final List<Preset> presets = presetNotifier.presets;
+    final ota = ref.watch(otaNotifierProvider);
+    // The firmware-update icon always shows in debug; in release it appears only
+    // when an update is actually available.
+    final showUpdateIcon =
+        kDebugMode || ota.status == OtaStatus.updateAvailable;
+    // Notify the user when an update becomes available — but only while the home
+    // screen is the visible route (not when a re-check runs behind the OTA
+    // screen).
+    ref.listen<OtaStatus>(otaNotifierProvider.select((s) => s.status),
+        (previous, next) {
+      final isCurrent = ModalRoute.of(context)?.isCurrent ?? false;
+      if (next == OtaStatus.updateAvailable && isCurrent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Firmware update available'),
+            duration: const Duration(seconds: 6),
+            action: SnackBarAction(
+              label: 'UPDATE',
+              onPressed: () => context.push('/ota'),
+            ),
+          ),
+        );
+      }
+    });
     return Stack(
       children: [
         Scaffold(
@@ -316,24 +379,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
             backgroundColor: Colors.blue.shade800,
             centerTitle: true,
             actions: [
+              if (showUpdateIcon)
+                IconButton(
+                  icon: const Icon(Icons.system_update, color: Colors.white),
+                  tooltip: 'Firmware update',
+                  onPressed: () => context.push('/ota'),
+                ),
               IconButton(
                 icon: const Icon(Icons.info_outline, color: Colors.white),
-                onPressed: () {
-                  showDialog(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: const Text('App Version'),
-                      content: Text('Version $_appVersion'),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text('OK'),
-                        ),
-                      ],
-                    ),
-                  );
-                },
+                onPressed: _showAppInfo,
               ),
+              // Battery indicator kept as the right-most icon.
+              const Center(child: BatteryIndicator()),
             ],
           ),
           body: SingleChildScrollView(

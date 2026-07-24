@@ -21,6 +21,17 @@ class BluetoothNotifier extends _$BluetoothNotifier {
   final String _batteryServiceUUID = "180f";
   final String _batteryCharacteristicUUID = "2a19";
   final String _characteristicConfigurationUUID = "2902";
+  final String _disServiceUUID = "180a";
+  final String _modelNumberUUID = "2a24";
+  final String _hardwareRevisionUUID = "2a27";
+  final String _firmwareRevisionUUID = "2a26";
+
+  /// Device Information Service values read once at connect time (for the app
+  /// info modal and OTA compatibility checks). Null until a device is connected
+  /// / if it doesn't expose them.
+  String? deviceModelNumber;
+  String? deviceHardwareRevision;
+  String? deviceFirmwareVersion;
 
   late BluetoothDescriptor _customConfigurationDescriptor;
 
@@ -81,12 +92,30 @@ class BluetoothNotifier extends _$BluetoothNotifier {
       final connectionSubscription =
       device.connectionState.listen((BluetoothConnectionState connState) async {
         if (connState == BluetoothConnectionState.disconnected) {
-          // Here you might navigate to a disconnection screen or update UI.
-          // For example, update the state:
-          routes.go('/');
-          state = state.copyWith(isConnected: false, connectedDevice: null);
-          print("Device disconnected");
-          // (In your old code, you used Get.to(); adjust as needed.)
+          // If a "disconnect 0/1" announcement already handled this (state is
+          // no longer connected), don't navigate again.
+          if (!state.isConnected) {
+            print("Disconnect already handled gracefully");
+            return;
+          }
+          // A disconnect is graceful only if the firmware announced it via a
+          // "disconnect 0/1" message just beforehand (recorded in
+          // state.disconnectReason). Otherwise it's an unexpected drop.
+          final announced = state.disconnectReason;
+          final reason = (announced == DeviceDisconnectReason.poweringOff ||
+                  announced == DeviceDisconnectReason.charging)
+              ? announced
+              : DeviceDisconnectReason.unexpected;
+          state = state.copyWith(
+            isConnected: false,
+            connectedDevice: null,
+            isCharging: false,
+            disconnectReason: reason,
+          );
+          print("Device disconnected (${reason.name})");
+          // Pass the reason to the connect screen so it can show a graceful
+          // "powering off"/"charging" message instead of an error.
+          routes.go('/', extra: reason);
         } else if (connState == BluetoothConnectionState.connected) {
           success = true;
         }
@@ -94,12 +123,20 @@ class BluetoothNotifier extends _$BluetoothNotifier {
 
       device.cancelWhenDisconnected(connectionSubscription, delayed: true, next: true);
       await discoverServices(device);
+      await _readDeviceInfo();
 
       // Setup notifications and listeners.
       await setupListeners(device);
+      await setupBatteryListener(device);
 
-      // Finally, update the state
-      state = state.copyWith(isConnected: true, connectedDevice: device);
+      // Finally, update the state. Clear any prior disconnect reason and stale
+      // charging flag; live values arrive via notifications.
+      state = state.copyWith(
+        isConnected: true,
+        connectedDevice: device,
+        isCharging: false,
+        disconnectReason: DeviceDisconnectReason.none,
+      );
       success = true;
     } catch (e) {
       success = false;
@@ -159,6 +196,54 @@ class BluetoothNotifier extends _$BluetoothNotifier {
     }
   }
 
+  /// Reads the Device Information Service (0x180A) model number (0x2A24) and
+  /// firmware revision (0x2A26) once at connect time, for the app info modal.
+  /// Best-effort: leaves a value null if the device doesn't expose that
+  /// characteristic. The firmware revision is published as "<version>/<slot>",
+  /// so only the version part is kept.
+  Future<void> _readDeviceInfo() async {
+    deviceModelNumber = null;
+    deviceHardwareRevision = null;
+    deviceFirmwareVersion = null;
+    try {
+      BluetoothService? dis;
+      for (final service in _services) {
+        if (service.uuid.toString() == _disServiceUUID) {
+          dis = service;
+          break;
+        }
+      }
+      if (dis == null) {
+        print("⚠️ Device Information Service (0x180A) not found");
+        return;
+      }
+      print("DIS characteristics: "
+          "${dis.characteristics.map((c) => c.uuid.toString()).toList()}");
+      for (final characteristic in dis.characteristics) {
+        final uuid = characteristic.uuid.toString();
+        if (uuid == _modelNumberUUID) {
+          deviceModelNumber = _decodeDeviceString(await characteristic.read());
+          print("Device model number: $deviceModelNumber");
+        } else if (uuid == _hardwareRevisionUUID) {
+          deviceHardwareRevision =
+              _decodeDeviceString(await characteristic.read());
+          print("Device hardware revision: $deviceHardwareRevision");
+        } else if (uuid == _firmwareRevisionUUID) {
+          deviceFirmwareVersion =
+              _decodeDeviceString(await characteristic.read()).split('/').first;
+          print("Device firmware version: $deviceFirmwareVersion");
+        }
+      }
+    } catch (e) {
+      print("⚠️ Error reading device info: $e");
+    }
+  }
+
+  /// Decodes a DIS string characteristic value (ASCII), dropping NUL padding
+  /// and surrounding whitespace.
+  String _decodeDeviceString(List<int> raw) =>
+      String.fromCharCodes(raw.where((b) => b != 0)).trim();
+
   /// Writes data to the device based on the provided stimulus.
   Future<void> writeToDevice(String stimulus, List<int> hexValues) async {
     switch (stimulus) {
@@ -211,6 +296,46 @@ class BluetoothNotifier extends _$BluetoothNotifier {
       }
     } catch (e) {
       print("Error in newWriteToDevice: $e");
+    }
+  }
+
+  /// Sends explicit "off" commands for every stimulus (TENS on both channels,
+  /// temperature, vibration) so nothing is active on the device. Used as a
+  /// redundancy right before an OTA update begins — the firmware also disables
+  /// all functionality during an update, and this is a belt-and-suspenders in
+  /// case that path is ever missed. Deliberately does NOT touch the stimulus
+  /// notifier state, so the user's saved settings are preserved.
+  Future<void> shutOffAllStimuli() async {
+    if (!state.isConnected) return;
+    try {
+      // TENS: intensity 0 and not playing, for each channel. The command
+      // format matches getCommand("tens"):
+      //   "T <intensity> <mode> <play> <channel> <phase>".
+      for (final channel in const [1, 2]) {
+        await newWriteToDevice("T 0 1 0 $channel 0");
+      }
+      // Temperature neutral (0) and vibration off (0 Hz).
+      await newWriteToDevice("t 0");
+      await newWriteToDevice("v 0");
+      print("Shut off all stimuli");
+    } catch (e) {
+      print("⚠️ Error shutting off stimuli: $e");
+    }
+  }
+
+  /// Tells the device to abort an in-progress OTA in place. Written as the ASCII
+  /// string "cancel" on the custom characteristic (same path as the T/t/v
+  /// commands, a normal write-with-response). On receiving it the firmware
+  /// resets its DFU session and re-enables all functions WITHOUT dropping the
+  /// BLE link, so the update can be retried on the same connection without
+  /// reconnecting. Caller must halt the DFU (bootloader) writes first so a
+  /// queued packet can't race the firmware's reset.
+  Future<void> sendOtaCancel() async {
+    try {
+      await newWriteToDevice("cancel");
+      print("Sent OTA cancel to device");
+    } catch (e) {
+      print("⚠️ Error sending OTA cancel: $e");
     }
   }
 
@@ -323,18 +448,8 @@ class BluetoothNotifier extends _$BluetoothNotifier {
 
   /// Sets up notifications and listeners on the custom characteristic.
   Future<void> setupListeners(BluetoothDevice device) async {
-    final customCharacteristicSubscription = _customCharacteristic.onValueReceived.listen((value) {
-      print("Characteristic received: $value");
-      String read = hexToString(value);
-      print("Received string: $read");
-      devDebugPrint(read);
-      if (read == "charge") {
-        // Insert logic to handle charging (for example, update state)
-        print("Device is charging");
-      } else if (read == "no charge" || read == "normal") {
-        state = state.copyWith(isCharging: false);
-      }
-    });
+    final customCharacteristicSubscription =
+        _customCharacteristic.onValueReceived.listen(_handleCustomCharacteristicValue);
 
     // Cancel the subscription when the device disconnects.
     device.cancelWhenDisconnected(customCharacteristicSubscription);
@@ -351,5 +466,124 @@ class BluetoothNotifier extends _$BluetoothNotifier {
     } else {
       print("⚠️ Characteristic does not support notifications or indications.");
     }
+  }
+
+  /// Handles a value from the custom characteristic, which is multiplexed:
+  ///   - a binary battery packet whose first byte is 0x62 (existing behavior), or
+  ///   - an ASCII command string ("charging 0/1", "disconnect 0/1", debug output).
+  /// Always branch on the first byte before attempting to decode text.
+  void _handleCustomCharacteristicValue(List<int> value) {
+    if (value.isEmpty) return;
+
+    // Binary battery packet. The battery percentage shown in the UI comes
+    // authoritatively from the standard Battery Service (0x2A19), so there is
+    // nothing to decode here for now — just don't misparse it as ASCII.
+    if (value.first == 0x62) {
+      print("Battery packet received (${value.length} bytes)");
+      return;
+    }
+
+    // ASCII command. Strip any trailing null terminator before decoding.
+    final bytes = value.takeWhile((b) => b != 0).toList();
+    final text = hexToString(bytes).trim();
+    if (text.isEmpty) return;
+    print("Received string: $text");
+
+    // Match the leading token and parse the integer argument; be tolerant of
+    // extra whitespace.
+    final parts = text.split(RegExp(r'\s+'));
+    final token = parts.first.toLowerCase();
+    final arg = parts.length > 1 ? int.tryParse(parts[1]) : null;
+
+    switch (token) {
+      case 'charging':
+        // Firmware: "charging 0" = charging ON, "charging 1" = charging OFF.
+        final charging = arg == 0;
+        state = state.copyWith(isCharging: charging);
+        print("Charging: $charging");
+        break;
+      case 'disconnect':
+        // Firmware: "disconnect 0" = powering off, "disconnect 1" = entering
+        // charging mode. The device will drop the link on its own, but the
+        // phone can take several seconds to notice (BLE supervision timeout),
+        // so act on the announcement immediately instead of waiting.
+        final reason = arg == 0
+            ? DeviceDisconnectReason.poweringOff
+            : DeviceDisconnectReason.charging;
+        print("Graceful disconnect: ${reason.name}");
+        _handleGracefulDisconnect(reason);
+        break;
+      default:
+        // Debug/telemetry strings (e.g. "T…", "t…", "v…").
+        devDebugPrint(text);
+        break;
+    }
+  }
+
+  /// Responds to a firmware "disconnect 0/1" announcement: record the reason,
+  /// return to the connect screen right away, and proactively drop the link so
+  /// we don't wait on the phone's BLE supervision timeout. The connection-state
+  /// listener will also fire when the link actually closes, but by then the UI
+  /// has already moved on (and the reason is still set, so it stays graceful).
+  Future<void> _handleGracefulDisconnect(DeviceDisconnectReason reason) async {
+    print("Graceful disconnect handling: ${reason.name}");
+    // Mark disconnected up front so the connection-state listener (which fires
+    // when the link actually closes) sees it's already been handled and skips
+    // navigating a second time.
+    state = state.copyWith(
+      isConnected: false,
+      connectedDevice: null,
+      isCharging: false,
+      disconnectReason: reason,
+    );
+    routes.go('/', extra: reason);
+    try {
+      await _myConnectedDevice?.disconnect();
+    } catch (e) {
+      print("Error during graceful disconnect: $e");
+    }
+  }
+
+  /// Intentionally drops the link and returns to the connect screen with the
+  /// given [reason] (shown as a graceful message, not an error). Used when the
+  /// user leaves the OTA screen after a failed/cancelled update while charging —
+  /// the device would otherwise stay abnormally connected instead of returning
+  /// to normal charging behavior.
+  Future<void> disconnectWithReason(DeviceDisconnectReason reason) =>
+      _handleGracefulDisconnect(reason);
+
+  /// Reads the current battery level and subscribes to updates from the standard
+  /// BLE Battery Service (0x180F / 0x2A19). The firmware pushes a fresh
+  /// state-of-charge roughly every 30 seconds (and on change).
+  Future<void> setupBatteryListener(BluetoothDevice device) async {
+    try {
+      final batterySubscription =
+          _batteryCharacteristic.onValueReceived.listen((value) {
+        _updateBatteryLevel(value);
+      });
+      device.cancelWhenDisconnected(batterySubscription);
+
+      // Prime with an initial read so the UI shows a value immediately.
+      final initial = await _batteryCharacteristic.read();
+      _updateBatteryLevel(initial);
+
+      if (_batteryCharacteristic.properties.notify ||
+          _batteryCharacteristic.properties.indicate) {
+        await _batteryCharacteristic.setNotifyValue(true);
+        print("✅ Battery notifications enabled.");
+      } else {
+        print("⚠️ Battery characteristic does not support notifications.");
+      }
+    } catch (e) {
+      print("⚠️ Error setting up battery listener: $e");
+    }
+  }
+
+  /// The Battery Level characteristic is a single byte, 0-100% SoC.
+  void _updateBatteryLevel(List<int> value) {
+    if (value.isEmpty) return;
+    final level = value.first.clamp(0, 100);
+    print("Battery level: $level%");
+    state = state.copyWith(batteryLevel: level);
   }
 }
